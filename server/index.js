@@ -6,6 +6,7 @@ const crypto = require("crypto")
 const { PlaceSync } = require("./sync")
 const { placesDir, placeKey: keyOf, readConfig, resolvePlaceDir, folderSize } = require("./places")
 const { keepAwake } = require("./awake")
+const { listConflicts } = require("./conflicts")
 const log = require("./log")
 
 const PORT = Number(process.env.CINQ_PORT ?? 34877)
@@ -119,7 +120,7 @@ function startServer(rootArg, { awake = true } = {}) {
 
 		"GET /size": async (_, __, query) => {
 			const dir = resolvePlaceDir(places, String(query.get("placeId") ?? 0), String(query.get("placeName") ?? "Untitled"), { links: readConfig().links })
-			return { dir, ...(await folderSize(dir)) }
+			return { dir, ...(await folderSize(dir)), conflicts: listConflicts(dir).length }
 		},
 
 		"POST /events": async (body, sync) => {

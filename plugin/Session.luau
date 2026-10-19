@@ -1,4 +1,5 @@
 const CollectionService = game:GetService("CollectionService")
+const HttpService = game:GetService("HttpService")
 const MarketplaceService = game:GetService("MarketplaceService")
 const Players = game:GetService("Players")
 const ScriptEditorService = game:GetService("ScriptEditorService")
@@ -15,6 +16,8 @@ const Tools = require(script.Parent.Tools)
 
 const MAX_EVENTS_PER_REQUEST = 200
 const SWEEP_INTERVAL_SECONDS = 5
+const INFO_SETTLE_SECONDS = 2
+const INFO_INTERVAL_SECONDS = 20
 
 const Session = {}
 Session.__index = Session
@@ -34,6 +37,7 @@ export type Session = typeof(setmetatable(
 		stamper: Stamper.Stamper?,
 		userNames: { [number]: string | boolean },
 		rescanScheduled: boolean,
+		infoScheduled: boolean,
 		outbox: { any },
 		sending: boolean,
 		lastSend: number,
@@ -58,6 +62,7 @@ function Session.new(onStatus: (string, boolean) -> ()): Session
 		stamper = nil,
 		userNames = {},
 		rescanScheduled = false,
+		infoScheduled = false,
 		outbox = {},
 		sending = false,
 		lastSend = 0,
@@ -152,6 +157,7 @@ function Session.connect(self: Session)
 	self:watchGlobal()
 	self:sendSnapshot()
 	self:sweepLoop()
+	self:infoLoop()
 	Status.set("live", body.dir)
 	self:setStatus(`Connected, syncing into {body.dir}`)
 end
@@ -255,6 +261,7 @@ function Session.kick(self: Session)
 					break
 				end
 			end
+			Status.pulse()
 			const ok, status = pcall(Http.request, "POST", "/events", { session = self.token, events = batch })
 			self.lastSend = os.clock()
 			if not ok or status ~= 200 then
@@ -263,8 +270,43 @@ function Session.kick(self: Session)
 				self.token = nil
 				break
 			end
+			self:scheduleInfo()
 		end
 		self.sending = false
+	end)
+end
+
+function Session.refreshInfo(self: Session)
+	const query = `placeId={game.PlaceId}&placeName={HttpService:UrlEncode(Session.placeName())}`
+	const ok, status, body = pcall(Http.request, "GET", `/size?{query}`)
+	if ok and status == 200 and body then
+		Status.setInfo(body.bytes, body.conflicts)
+	end
+end
+
+-- Folder size and conflicts change with syncing, so they're refreshed once it settles rather than per batch.
+function Session.scheduleInfo(self: Session)
+	if self.infoScheduled then
+		return
+	end
+	self.infoScheduled = true
+	const token = self.token
+	task.delay(INFO_SETTLE_SECONDS, function()
+		self.infoScheduled = false
+		if self.token == token then
+			self:refreshInfo()
+		end
+	end)
+end
+
+-- Also on a timer, since conflicts get resolved from the CLI without Studio hearing about it.
+function Session.infoLoop(self: Session)
+	const token = self.token
+	task.spawn(function()
+		while self.token == token do
+			self:refreshInfo()
+			task.wait(INFO_INTERVAL_SECONDS)
+		end
 	end)
 end
 
@@ -527,6 +569,7 @@ function Session.pollLoop(self: Session): string
 				if op.op == "tool" then
 					task.spawn(self.runTool, self, op)
 				elseif op.op == "notice" then
+					task.spawn(self.refreshInfo, self)
 					self:setStatus(`{op.path}: {op.message}`, true)
 				else
 					self:apply(op)
@@ -535,6 +578,8 @@ function Session.pollLoop(self: Session): string
 				self.after = op.seq
 			end
 			if applied then
+				Status.pulse()
+				self:scheduleInfo()
 				self:rescan(true)
 			end
 		end
