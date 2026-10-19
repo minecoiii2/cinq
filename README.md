@@ -16,7 +16,7 @@ Live two-way sync between Roblox Studio and your file system, built for editing 
 ## Setup
 
 1. Install [Node.js](https://nodejs.org) 20+.
-2. Install the plugin: run `install-plugin.bat`, or drop `dist/Cinq.rbxm` into your Studio plugins folder (Plugins tab → Plugins Folder).
+2. Install the plugin: download `Cinq.rbxm` from the [latest release](https://github.com/minecoiii2/cinq/releases/latest) into your Studio plugins folder (Plugins tab → Plugins Folder), or build and install it from source with `install-plugin.bat` (`cinq install-plugin`).
 3. Start the server: double-click `cinq.bat` (or `cinq run`) to run it in a window, or `cinq start` to run it in the background without one (`cinq stop` ends it). Every place syncs into the `Cinq` folder next to it, wherever you start it from, one server handles every open Studio, and it keeps your computer from sleeping (like PowerToys Awake, the screen can still turn off) until the terminal or Claude window that started it closes. The server itself keeps running and syncing after that. `cinq awake` turns the lock back on for your current terminal, `cinq awake off` drops it, and `--no-awake` skips it.
 4. In Studio, click **Cinq** in the Plugins toolbar and allow the localhost request.
 
