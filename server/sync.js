@@ -5,7 +5,7 @@ const fsp = fs.promises
 const path = require("path")
 const crypto = require("crypto")
 const { SERVICES, scriptPath, parsePath } = require("./paths")
-const { merge3, diffHunks } = require("./merge")
+const { merge3 } = require("./merge")
 const { Journal } = require("./journal")
 const log = require("./log")
 const { SOURCEMAP_FILE, UNSYNCED_DIR, buildSourcemap, writeEditorSettings } = require("./sourcemap")
@@ -26,16 +26,6 @@ const baseName = (rel) => rel.slice(rel.lastIndexOf("/") + 1)
 // Studio's UpdateSourceAsync always stores LF, so both sides are compared and written in LF.
 const normalize = (text) => text.replace(/\r\n/g, "\n")
 
-function changeSummary(before, after) {
-	const hunks = diffHunks((before ?? "").split("\n"), after.split("\n"))
-	let added = 0
-	let removed = 0
-	for (const h of hunks) {
-		added += h.b1 - h.b0
-		removed += h.a1 - h.a0
-	}
-	return { added, removed, line: hunks.length > 0 ? hunks[0].b0 + 1 : 1 }
-}
 
 // 32-bit FNV-1a over the UTF-8 bytes; must match plugin/Hash.luau.
 function fnv(text) {
@@ -184,15 +174,13 @@ class PlaceSync {
 	send(op) {
 		op.opId = ++this.opCounter
 		op.seq = ++this.seq
-		if (op.op === "update" || op.op === "create") op.change = changeSummary(op.op === "create" ? "" : op.base, op.source)
-		if (op.op !== "create" && op.op !== "move") op.path = this.scripts.get(op.id)?.path
 		this.outbox.push(op)
 		this.pending.set(op.opId, op)
 		if (op.id) this.inflight.set(op.id, op.opId)
 		this.waiter?.resolve(this.outbox.slice())
 	}
 
-	// For the plugin's activity panel only: never acknowledged, so it doesn't hold up `cinq wait`.
+	// Shown as a warning in Studio's Output. Never acknowledged, so it doesn't hold up `cinq wait`.
 	notify(kind, rel, message, id) {
 		this.outbox.push({ op: "notice", kind, path: rel, message, id, seq: ++this.seq })
 		this.waiter?.resolve(this.outbox.slice())

@@ -3,7 +3,6 @@ const MarketplaceService = game:GetService("MarketplaceService")
 const Players = game:GetService("Players")
 const ScriptEditorService = game:GetService("ScriptEditorService")
 
-const Activity = require(script.Parent.Activity)
 const Applier = require(script.Parent.Applier)
 const Constants = require(script.Parent.Constants)
 const Drafts = require(script.Parent.Drafts)
@@ -11,6 +10,7 @@ const Http = require(script.Parent.Http)
 const Scanner = require(script.Parent.Scanner)
 const Source = require(script.Parent.Source)
 const Stamper = require(script.Parent.Stamper)
+const Status = require(script.Parent.Status)
 const Tools = require(script.Parent.Tools)
 
 const MAX_EVENTS_PER_REQUEST = 200
@@ -81,6 +81,7 @@ function Session.start(self: Session)
 			const ok, err = pcall(self.connect, self)
 			if not ok then
 				self:teardown()
+				Status.set("waiting")
 				self:setStatus(
 					if string.find(tostring(err), "HttpError")
 						then `Waiting for the Cinq server at {Constants.Url}`
@@ -103,6 +104,7 @@ function Session.start(self: Session)
 				self:setStatus("Another Studio connected to this place, stopped syncing", true)
 				self:stop()
 			elseif self.active then
+				Status.set("waiting")
 				self:setStatus(`Connection lost ({reason}), reconnecting`, true)
 				task.wait(1)
 			end
@@ -121,6 +123,7 @@ function Session.stop(self: Session)
 	if token then
 		task.spawn(pcall, Http.request, "POST", "/disconnect", { session = token })
 	end
+	Status.set("off")
 	self:setStatus("Disconnected")
 end
 
@@ -149,6 +152,7 @@ function Session.connect(self: Session)
 	self:watchGlobal()
 	self:sendSnapshot()
 	self:sweepLoop()
+	Status.set("live", body.dir)
 	self:setStatus(`Connected, syncing into {body.dir}`)
 end
 
@@ -439,19 +443,6 @@ function Session.apply(self: Session, op: any)
 	if result.ok and op.op ~= "delete" and target and self.stamper then
 		self.stamper:stamp(target)
 	end
-	if result.ok then
-		const change = op.change or {}
-		Activity.add({
-			kind = "disk",
-			path = op.path,
-			instance = if op.op == "delete" then nil else target,
-			line = change.line,
-			detail = if op.op == "update" then `edited, +{change.added} −{change.removed}, line {change.line}`
-				elseif op.op == "create" then `created, {change.added} lines`
-				elseif op.op == "move" then `moved from {op.from}`
-				else "deleted",
-		})
-	end
 	self:enqueue({ type = "applied", opId = op.opId, ok = result.ok, source = result.source, error = result.error })
 end
 
@@ -537,7 +528,6 @@ function Session.pollLoop(self: Session): string
 					task.spawn(self.runTool, self, op)
 				elseif op.op == "notice" then
 					self:setStatus(`{op.path}: {op.message}`, true)
-					Activity.add({ kind = op.kind, path = op.path, detail = op.message, instance = if op.id then self.byId[op.id] else nil })
 				else
 					self:apply(op)
 					applied = true

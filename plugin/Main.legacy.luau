@@ -9,10 +9,10 @@ end
 
 const HttpService = game:GetService("HttpService")
 
-const Activity = require(script.Parent.Activity)
 const Drafts = require(script.Parent.Drafts)
 const Http = require(script.Parent.Http)
 const Session = require(script.Parent.Session)
+const Status = require(script.Parent.Status)
 
 -- Unpublished places all have PlaceId 0, so they're remembered by name; dots in setting keys don't persist.
 const PLACE_KEY = if game.PlaceId ~= 0 then tostring(game.PlaceId) else `0:{string.gsub(game.Name, "%.", "_")}`
@@ -24,17 +24,8 @@ const button = toolbar:CreateButton("CinqSync", "Sync this place's scripts with 
 button.ClickableWhenViewportHidden = true
 const sizeButton = toolbar:CreateButton("CinqSize", "Print how much disk space this place's Cinq folder uses", "", "Size")
 sizeButton.ClickableWhenViewportHidden = true
-const activityButton = toolbar:CreateButton("CinqActivity", "Show changes from disk, conflicts and refused changes", "", "Activity")
-activityButton.ClickableWhenViewportHidden = true
-
-const activity = Activity.init(plugin)
-activityButton:SetActive(activity.Enabled)
-activityButton.Click:Connect(function()
-	activity.Enabled = not activity.Enabled
-end)
-activity:GetPropertyChangedSignal("Enabled"):Connect(function()
-	activityButton:SetActive(activity.Enabled)
-end)
+const statusButton = toolbar:CreateButton("CinqStatus", "Show whether this place is syncing, and into which folder", "", "Status")
+statusButton.ClickableWhenViewportHidden = true
 
 sizeButton.Click:Connect(function()
 	sizeButton:SetActive(false)
@@ -75,12 +66,23 @@ const function stop()
 	plugin:SetSetting(AUTOCONNECT_SETTING, false)
 end
 
-button.Click:Connect(function()
+const function toggle()
 	if session then
 		stop()
 	else
 		start()
 	end
+end
+
+button.Click:Connect(toggle)
+
+const statusWidget = Status.init(plugin, toggle)
+statusButton:SetActive(statusWidget.Enabled)
+statusButton.Click:Connect(function()
+	statusWidget.Enabled = not statusWidget.Enabled
+end)
+statusWidget:GetPropertyChangedSignal("Enabled"):Connect(function()
+	statusButton:SetActive(statusWidget.Enabled)
 end)
 
 plugin.Unloading:Connect(function()
