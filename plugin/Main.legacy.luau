@@ -9,6 +9,7 @@ end
 
 const HttpService = game:GetService("HttpService")
 
+const Activity = require(script.Parent.Activity)
 const Drafts = require(script.Parent.Drafts)
 const Http = require(script.Parent.Http)
 const Session = require(script.Parent.Session)
@@ -23,6 +24,17 @@ const button = toolbar:CreateButton("CinqSync", "Sync this place's scripts with 
 button.ClickableWhenViewportHidden = true
 const sizeButton = toolbar:CreateButton("CinqSize", "Print how much disk space this place's Cinq folder uses", "", "Size")
 sizeButton.ClickableWhenViewportHidden = true
+const activityButton = toolbar:CreateButton("CinqActivity", "Show changes from disk, conflicts and refused changes", "", "Activity")
+activityButton.ClickableWhenViewportHidden = true
+
+const activity = Activity.init(plugin)
+activityButton:SetActive(activity.Enabled)
+activityButton.Click:Connect(function()
+	activity.Enabled = not activity.Enabled
+end)
+activity:GetPropertyChangedSignal("Enabled"):Connect(function()
+	activityButton:SetActive(activity.Enabled)
+end)
 
 sizeButton.Click:Connect(function()
 	sizeButton:SetActive(false)

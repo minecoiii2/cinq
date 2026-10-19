@@ -192,10 +192,48 @@ const function formatValue(value: any): string
 	return clip(tostring(value), 120)
 end
 
+-- GetFullName joins names with dots, and names can contain dots too, so each split is tried until one resolves.
+const function findByFullName(fullName: string): Instance?
+	const parts = string.split(fullName, ".")
+	const function walk(parent: Instance, index: number): Instance?
+		if index > #parts then
+			return parent
+		end
+		for last = index, #parts do
+			const child = parent:FindFirstChild(table.concat(parts, ".", index, last))
+			if child then
+				const found = walk(child, last + 1)
+				if found then
+					return found
+				end
+			end
+		end
+		return nil
+	end
+	return walk(game, 1)
+end
+
+-- Appends "→ <file>:<line>" to Output lines that point at a synced script, so the file can be opened directly.
+const function linkScriptReference(line: string, cache: { [string]: string }): string
+	local fullName, lineNumber = string.match(line, "Script '([^']+)', Line (%d+)")
+	if not fullName then
+		fullName, lineNumber = string.match(line, "^%s*([^:%s][^:]-):(%d+)[:%s]")
+	end
+	if not fullName then
+		return line
+	end
+	if cache[fullName] == nil then
+		const instance = findByFullName(fullName)
+		cache[fullName] = if instance then fileOf(instance) else ""
+	end
+	return if cache[fullName] == "" then line else `{line}{cache[fullName]}:{lineNumber}`
+end
+
 function Tools.console(args): string
 	const limit = clamp(args.lines, 50, 500)
 	const grep = if args.grep then string.lower(args.grep) else nil
 	const lines = {}
+	const references = {}
 	local lastMessage = nil
 	local repeats = 0
 	for _, entry in LogService:GetLogHistory() do
@@ -215,10 +253,14 @@ function Tools.console(args): string
 		lastMessage = entry.message
 		repeats = 0
 		const messageLines = string.split(entry.message, "\n")
+		const shownLines = if args.full then messageLines else { messageLines[1] }
+		for i, messageLine in shownLines do
+			shownLines[i] = linkScriptReference(clip(messageLine, MAX_LINE), references)
+		end
 		const body = if args.full
-			then table.concat(messageLines, "\n    ")
-			else messageLines[1] .. (if #messageLines > 1 then ` (+{#messageLines - 1} lines)` else "")
-		table.insert(lines, `{os.date("%H:%M:%S", entry.timestamp)} {MESSAGE_PREFIX[kind] or " "} {clip(body, MAX_LINE)}`)
+			then table.concat(shownLines, "\n    ")
+			else shownLines[1] .. (if #messageLines > 1 then ` (+{#messageLines - 1} lines)` else "")
+		table.insert(lines, `{os.date("%H:%M:%S", entry.timestamp)} {MESSAGE_PREFIX[kind] or " "} {body}`)
 	end
 	if #lines == 0 then
 		return "No matching output"
@@ -571,6 +613,37 @@ function Tools.datamodel(): string
 		end
 	end
 	return HttpService:JSONEncode(roots)
+end
+
+const function findById(id: string): Instance?
+	for _, name in Constants.Services do
+		const found = game:GetService(name):QueryDescendants(`[${Constants.IdAttribute} = "{id}"]`)[1]
+		if found then
+			return found
+		end
+	end
+	return nil
+end
+
+function Tools.open(args): string
+	const target = if args.id then findById(args.id) else resolvePath(args.path)
+	if not target then
+		error("that file's script isn't in Studio anymore (cinq wait, then try again)", 0)
+	end
+	if not target:IsA("LuaSourceContainer") then
+		Selection:Set({ target })
+		return `Selected {formatPath(target)} [{target.ClassName}] in the Explorer`
+	end
+	const ok, problem = ScriptEditorService:OpenScriptDocumentAsync(target :: LuaSourceContainer)
+	if not ok then
+		error(`couldn't open {formatPath(target)}: {problem}`, 0)
+	end
+	const document = ScriptEditorService:FindScriptDocument(target :: LuaSourceContainer)
+	const line = math.max(1, math.floor(tonumber(args.line) or 1))
+	if document then
+		document:RequestSetSelectionAsync(math.min(line, document:GetLineCount()), 1)
+	end
+	return `Opened {formatPath(target)}{fileOf(target)} at line {line}`
 end
 
 const function scriptAt(path: string?): LuaSourceContainer

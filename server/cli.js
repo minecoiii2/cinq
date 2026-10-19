@@ -56,6 +56,8 @@ Studio tools (talk to a connected Studio; add --place <name|PlaceId> when severa
   drafts [path]             Drafts mode: scripts whose draft differs from the committed version, and whether a
                             newer commit landed on them (--diff shows each side, --merge 3-way merges clean ones
                             into your draft; then click Merge and Commit in View → Drafts)
+  open <file>[:line]        Open a synced file's script in Studio's editor at a line, or any instance path
+                            (scripts open, other instances get selected in the Explorer)
   selection                 What's selected in the Explorer, the focused script with the cursor or selected
                             lines, and the other open script tabs
   grep <text>               Search every script in Studio, synced or not (--in <path>, -i, --lua for a Lua
@@ -451,6 +453,21 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 			wait: () => commands.wait({ place: args.place }),
 			editScript: (target, old, replacement) => toolText("edit", args, { path: target, edits: [{ old, new: replacement }] }),
 		}),
+	open: async (args) => {
+		const target = args._[0]
+		if (!target) usage("cinq open <file>[:line] | <instance path> [line]")
+		const [, file, lineSuffix] = /^(.*?)(?::(\d+))?$/.exec(target)
+		const line = Number(args._[1] ?? lineSuffix ?? 1)
+		if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return tool("open", args, { path: file, line })
+		const abs = path.resolve(file)
+		const place = listPlaces(await placesDirOf(args)).find((p) => abs.toLowerCase().startsWith(p.dir.toLowerCase() + path.sep))
+		if (!place) usage(`${file} isn't inside a synced place's folder (see cinq places)`)
+		const rel = path.relative(place.dir, abs).split(path.sep).join("/").toLowerCase()
+		const id = Object.entries(readState(place.dir)?.scripts ?? {}).find(([, st]) => st.path.toLowerCase() === rel)?.[0]
+		if (!id) usage(`${file} isn't synced to a script yet (cinq wait, then try again)`)
+		const placeArg = args.place ?? (/^[1-9]\d*$/.test(place.placeId) ? place.placeId : place.name)
+		return tool("open", { ...args, place: placeArg }, { id, line })
+	},
 	selection: (args) => tool("selection", args, {}),
 	grep: (args) => {
 		if (!args._[0]) usage("cinq grep <text> [--in <path>] [-i] [--lua] [--limit 100]")

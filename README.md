@@ -20,7 +20,7 @@ Live two-way sync between Roblox Studio and your file system, built for editing 
 3. Start the server: double-click `cinq.bat` (or `cinq run`) to run it in a window, or `cinq start` to run it in the background without one (`cinq stop` ends it). Every place syncs into one places folder (the `Cinq` folder in this repo unless you change it, see below) wherever you start it from, one server handles every open Studio, and it keeps your computer from sleeping (like PowerToys Awake, the screen can still turn off) until the terminal or Claude window that started it closes. The server itself keeps running and syncing after that. `cinq awake` turns the lock back on for your current terminal, `cinq awake off` drops it, and `--no-awake` skips it.
 4. In Studio, click **Cinq** in the Plugins toolbar and allow the localhost request.
 
-Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublished file into `<places folder>/<file name>/`. Clicking **Cinq** turns syncing on or off for that place, and Studio remembers the choice per place, so enabled places reconnect automatically and new places are left alone. **Size** prints how much disk space the place's folder uses. Studio sends its changes at most once every 3 seconds; changes on disk reach Studio right away.
+Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublished file into `<places folder>/<file name>/`. Clicking **Cinq** turns syncing on or off for that place, and Studio remembers the choice per place, so enabled places reconnect automatically and new places are left alone. **Size** prints how much disk space the place's folder uses. **Activity** opens a panel listing changes that arrive from disk (with how many lines changed and where), conflicts and refused changes; click one to open the script at that line. Studio sends its changes at most once every 3 seconds; changes on disk reach Studio right away.
 
 ### Where places sync
 
@@ -48,13 +48,14 @@ Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublish
 | `backup [place]` | Copy a place's synced scripts into `Cinq/.backups/<place>/<date_time>/`; `backup list` shows them |
 | `log [-n 30]` | Recent server log (`--warnings`, `--errors`, `--grep`) |
 | `install-plugin` | Build `dist/Cinq.rbxm` and install it into Studio (`--mirror <place>` also copies it into that place) |
-| `console [-n 50]` | Recent Studio Output (`--errors`, `--warnings`, `--grep`, `--full`) |
+| `console [-n 50]` | Recent Studio Output (`--errors`, `--warnings`, `--grep`, `--full`); errors in synced scripts point at the file and line |
 | `tree [path] [-d 2]` | The instance tree under a path |
 | `find <selector>` | QueryDescendants search (`--in <path>`) |
 | `inspect <path>` | Non-default properties, attributes, tags and children (`--all`) |
 | `sourcemap [place]` | Write the place's `sourcemap.json` for luau-lsp (kept current after) |
 | `check [paths]` | Type-check and lint with luau-lsp, reporting only problems that are new since the baseline |
 | `drafts [path]` | In Drafts mode, scripts whose draft differs from the committed version and whether a newer commit landed on them (`--diff`, `--merge` 3-way merges clean ones into your draft) |
+| `open <file>[:line]` | Open a synced file's script in Studio's editor at a line (or select any instance path in the Explorer) |
 | `selection` | What's selected in the Explorer, the focused script with the cursor or selected lines, and the open tabs |
 | `grep <text>` | Search every script in Studio, synced or not (`--in`, `-i`, `--lua`) |
 | `read <path>` | Any script's source as the editor has it (drafts included), with line numbers (`--from`, `--to`) |
