@@ -70,3 +70,7 @@ Studio tools take `-p <part of a name or PlaceId>` when several Studios are conn
 `cinq sourcemap` writes a Rojo-style `sourcemap.json` into the place's folder from the connected Studio: every instance in the synced services (plus the top of Workspace) with its class, synced scripts pointing at their files, and read-only copies in `.cinq/unsynced/` for scripts Cinq doesn't sync (packages, `Cinq_Ignore`), so requiring them still resolves. Cinq keeps it current as scripts are added, moved and removed, and adds a `.vscode/settings.json` so opening the place's folder in VS Code with the [Luau extension](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp) gives types, autocomplete and go-to-definition across scripts.
 
 `cinq check [paths]` refreshes the sourcemap and runs [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) `analyze` with the new type solver (the one Studio uses), reusing the extension's Roblox type definitions. The first full check records the existing problems as a baseline in `.cinq/check-baseline.json`; after that only new ones are reported (`--all` shows every one, `--baseline` records them again), so it's useful on large codebases that were never type-clean.
+
+## License
+
+[MIT](LICENSE)

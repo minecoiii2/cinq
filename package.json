@@ -3,7 +3,11 @@
 	"version": "0.1.0",
 	"description": "Two-way sync between Roblox Studio scripts and local files",
 	"private": true,
-	"license": "UNLICENSED",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/minecoiii2/cinq.git"
+	},
 	"engines": {
 		"node": ">=20"
 	},
