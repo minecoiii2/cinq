@@ -12,7 +12,7 @@ async function main() {
 		console.log(`Cinq server: not running (nothing on port ${PORT})`)
 		process.exit(1)
 	}
-	console.log(`Cinq server: running ${health.version} (pid ${health.pid}), syncing into ${health.root}${health.awake ? `, keeping this computer awake until ${health.awake}` : ""}`)
+	console.log(`Cinq server: running ${health.version} (pid ${health.pid}), syncing into ${health.placesDir ?? health.root}${health.awake ? `, keeping this computer awake until ${health.awake}` : ""}`)
 	if (health.places.length === 0) {
 		console.log("Studio: no places connected")
 		process.exit(2)

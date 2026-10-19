@@ -13,6 +13,7 @@ const Stamper = require(script.Parent.Stamper)
 const Tools = require(script.Parent.Tools)
 
 const MAX_EVENTS_PER_REQUEST = 200
+const SWEEP_INTERVAL_SECONDS = 5
 
 const Session = {}
 Session.__index = Session
@@ -146,6 +147,7 @@ function Session.connect(self: Session)
 	self.after = 0
 	self:watchGlobal()
 	self:sendSnapshot()
+	self:sweepLoop()
 	self:setStatus(`Connected, syncing into {body.dir}`)
 end
 
@@ -439,7 +441,35 @@ function Session.apply(self: Session, op: any)
 	self:enqueue({ type = "applied", opId = op.opId, ok = result.ok, source = result.source, error = result.error })
 end
 
+-- In Drafts mode an edit that isn't typed into an open tab (a plugin's, cinq edit or exec, Studio's own draft merge)
+-- changes neither .Source nor a ScriptDocument, so no signal fires; comparing against what was last sent catches it.
+function Session.sweep(self: Session): number
+	const started = os.clock()
+	for instance, id in self.scriptIds do
+		if self.dirtySources[instance] or self.lastSource[id] == nil then
+			continue
+		end
+		const ok, source = pcall(Source.read, instance :: LuaSourceContainer)
+		if ok and source ~= self.lastSource[id] then
+			self:markDirty(instance)
+		end
+	end
+	return os.clock() - started
+end
+
+function Session.sweepLoop(self: Session)
+	const token = self.token
+	task.spawn(function()
+		while self.token == token do
+			const took = self:sweep()
+			-- A big place takes longer to read, so it's swept less often to keep Studio responsive.
+			task.wait(math.max(SWEEP_INTERVAL_SECONDS, took * 50))
+		end
+	end)
+end
+
 function Session.flush(self: Session): string
+	self:sweep()
 	self.lastSend = 0
 	self:kick()
 	const deadline = os.clock() + 5
@@ -454,6 +484,9 @@ function Session.runTool(self: Session, op: any)
 	const ok, result = pcall(function()
 		return if op.tool == "flush" then self:flush() else Tools.run(op.tool, op.args)
 	end)
+	if op.tool == "exec" or op.tool == "edit" then
+		self:sweep()
+	end
 	pcall(Http.request, "POST", "/tool/result", {
 		session = token,
 		requestId = op.requestId,

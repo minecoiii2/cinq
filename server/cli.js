@@ -5,23 +5,29 @@ const fs = require("fs")
 const { spawn, spawnSync } = require("child_process")
 const path = require("path")
 const { PORT } = require("./index")
-const { SYNC_FOLDER, DEFAULT_ROOT, folderSize } = require("./places")
+const { SYNC_FOLDER, CONFIG_FILE, DEFAULT_PLACES_DIR, readConfig, writeConfig, placesDir, placeKey, listPlaceDirs, folderSize } = require("./places")
 const { listConflicts, describeConflict, resolveConflict } = require("./conflicts")
 const { findOwner } = require("./owner")
 const { SOURCEMAP_FILE } = require("./sourcemap")
 const { displayPath } = require("./check")
 
-const BOOLEAN_FLAGS = new Set(["errors", "warnings", "full", "all", "json", "no-diff", "no-install", "no-awake", "ignore-case", "lua", "no-refresh", "baseline", "diff", "merge"])
+const BOOLEAN_FLAGS = new Set(["errors", "warnings", "full", "all", "json", "no-diff", "no-install", "no-awake", "ignore-case", "lua", "no-refresh", "baseline", "diff", "merge", "reset", "keep"])
 const ALIASES = { n: "lines", e: "code", d: "depth", p: "place", i: "ignore-case" }
 
 const HELP = `Cinq, two-way sync between Roblox Studio and your files
 
 Usage: cinq <command> [options]
 
-  run [root]                Start the sync server in this window (the default when no command is given); places
-                            sync into the Cinq folder next to the app unless a root is given
-  start [root]              Start the server in the background, without a window; it keeps running after
+  run [folder]              Start the sync server in this window (the default when no command is given); places
+                            sync into the configured places folder unless a folder is given
+  start [folder]            Start the server in the background, without a window; it keeps running after
                             the terminal or Claude closes
+  config                    Where places sync and which places are linked to their own folders
+  config root <folder>      Sync places into this folder from now on, moving the existing ones (--reset for
+                            the default, the Cinq folder next to the app)
+  link <place> <folder>     Give one place its own folder, e.g. inside a game's git repo, moving its files and
+                            history there (a PlaceId that hasn't synced yet works too)
+  unlink <place>            Move a linked place back into the places folder (--keep leaves its files)
   stop                      Stop the server
   awake [off]               Keep the computer from sleeping until this terminal (or Claude) closes, or stop.
                             run and start turn this on unless --no-awake
@@ -87,9 +93,13 @@ async function health() {
 	}
 }
 
-async function rootDir(args) {
+// The folder places sync into, as the running server sees it (it may have been started with another one).
+async function placesDirOf(args) {
 	if (args.root) return path.resolve(args.root)
-	return (await health())?.root ?? DEFAULT_ROOT
+	const running = await health()
+	if (running?.placesDir) return running.placesDir
+	if (running?.root) return path.join(running.root, SYNC_FOLDER)
+	return placesDir()
 }
 
 function readState(dir) {
@@ -100,23 +110,19 @@ function readState(dir) {
 	}
 }
 
-function listPlaces(root) {
-	const base = path.join(root, SYNC_FOLDER)
-	let names = []
-	try {
-		names = fs.readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name)
-	} catch {}
-	return names.map((name) => {
-		const state = readState(path.join(base, name))
-		const placeId = state?.placeId ?? "?"
-		const label = placeId !== "0" && state?.placeName && state.placeName !== name ? `${name} "${state.placeName}"` : name
-		return { name, label, placeName: state?.placeName ?? name, dir: path.join(base, name), placeId, scripts: Object.keys(state?.scripts ?? {}).length }
+function listPlaces(base) {
+	return listPlaceDirs(base).map(({ dir, name, linked }) => {
+		const state = readState(dir)
+		const placeId = String(state?.placeId ?? (/^d+$/.test(linked || "") ? linked : "?"))
+		const named = placeId !== "0" && state?.placeName && state.placeName !== name ? `${name} "${state.placeName}"` : name
+		const label = linked ? `${named} (linked: ${dir})` : named
+		return { name, label, placeName: state?.placeName ?? name, dir, placeId, linked, scripts: Object.keys(state?.scripts ?? {}).length }
 	})
 }
 
 function matchPlace(places, wanted) {
 	const needle = String(wanted).toLowerCase()
-	const exact = places.filter((p) => [p.name, p.placeName, p.placeId].some((v) => v.toLowerCase() === needle))
+	const exact = places.filter((p) => [p.name, p.placeName, p.placeId, p.linked || ""].some((v) => v.toLowerCase() === needle))
 	const matches = exact.length > 0 ? exact : places.filter((p) => [p.name, p.placeName].some((v) => v.toLowerCase().includes(needle)))
 	if (matches.length === 1) return matches[0]
 	console.error(matches.length === 0 ? `No synced place matches "${wanted}" (see cinq places)` : `"${wanted}" matches several places, nothing was done. Use more of the name or the PlaceId: ${matches.map((p) => p.label).join(", ")}`)
@@ -144,7 +150,7 @@ function startOutsideJob(command) {
 
 // A place from --place, from the paths given (or the current folder) when they're inside one, or the only connected Studio.
 async function pickPlace(args, paths = []) {
-	const places = listPlaces(await rootDir(args))
+	const places = listPlaces(await placesDirOf(args))
 	if (args.place) return matchPlace(places, args.place)
 	for (const hint of paths.length > 0 ? paths : [process.cwd()]) {
 		const abs = path.resolve(hint).toLowerCase()
@@ -162,7 +168,7 @@ async function refreshSourcemap(place) {
 		const response = await fetch(`http://127.0.0.1:${PORT}/sourcemap`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ place: place.name }),
+			body: JSON.stringify({ place: /^[1-9]d*$/.test(place.placeId) ? place.placeId : place.name }),
 		})
 		return await response.json()
 	} catch {
@@ -262,15 +268,15 @@ const commands = {
 	},
 
 	changes: async (args, argv) => {
-		const extra = args.root ? [] : ["--root", await rootDir(args)]
+		const extra = args.root ? [] : ["--root", await placesDirOf(args)]
 		await require("./changes").main([...argv, ...extra])
 	},
 
 	places: async (args) => {
-		const root = await rootDir(args)
+		const root = await placesDirOf(args)
 		const connected = new Set(((await health())?.places ?? []).map((p) => p.dir.toLowerCase()))
 		const places = listPlaces(root)
-		if (places.length === 0) return console.log(`No synced places in ${path.join(root, SYNC_FOLDER)}`)
+		if (places.length === 0) return console.log(`No synced places in ${root}`)
 		for (const place of places) {
 			const { bytes } = await folderSize(place.dir)
 			const live = connected.has(place.dir.toLowerCase()) ? "  connected" : ""
@@ -279,7 +285,7 @@ const commands = {
 	},
 
 	size: async (args) => {
-		const root = await rootDir(args)
+		const root = await placesDirOf(args)
 		const all = listPlaces(root)
 		const places = args._[0] ? [matchPlace(all, args._[0])] : all
 		if (places.length === 0) {
@@ -296,7 +302,7 @@ const commands = {
 	},
 
 	conflicts: async (args) => {
-		const root = await rootDir(args)
+		const root = await placesDirOf(args)
 		const all = listPlaces(root)
 		const places = args.place ? [matchPlace(all, args.place)] : all
 		const resolving = args._[0] === "resolve"
@@ -353,12 +359,12 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 	},
 
 	backup: async (args) => {
-		const root = await rootDir(args)
+		const root = await placesDirOf(args)
 		const all = listPlaces(root)
 		const listing = args._[0] === "list"
 		const wanted = listing ? args._[1] : args._[0]
 		const places = wanted ? [matchPlace(all, wanted)] : all
-		const backups = path.join(root, SYNC_FOLDER, ".backups")
+		const backups = path.join(root, ".backups")
 		if (listing) {
 			let count = 0
 			for (const place of places) {
@@ -386,9 +392,9 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 	},
 
 	log: async (args) => {
-		const file = path.join(await rootDir(args), SYNC_FOLDER, ".cinq", "server.log")
+		const file = path.join(await placesDirOf(args), ".cinq", "server.log")
 		const text = [file.replace(/\.log$/, ".old.log"), file].map((f) => (fs.existsSync(f) ? fs.readFileSync(f, "utf8") : "")).join("")
-		const place = args.place ? matchPlace(listPlaces(await rootDir(args)), args.place) : null
+		const place = args.place ? matchPlace(listPlaces(await placesDirOf(args)), args.place) : null
 		const grep = args.grep?.toLowerCase()
 		const lines = text.split("\n").filter((line) => {
 			if (!line) return false
@@ -408,6 +414,14 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 	tree: (args) => tool("tree", args, { path: args._[0], depth: args.depth, limit: args.limit }),
 	find: (args) => tool("find", args, { selector: args._[0], within: args.in, limit: args.limit }),
 	inspect: (args) => tool("inspect", args, { path: args._[0], all: args.all }),
+	config: (args) => {
+		const config = require("./config")
+		if (args._[0] === undefined) return config.show()
+		if (args._[0] === "root") return config.setRoot(args, cliHelpers)
+		usage("cinq config | cinq config root <folder> | cinq config root --reset")
+	},
+	link: (args) => require("./config").link(args, cliHelpers),
+	unlink: (args) => require("./config").unlink(args, cliHelpers),
 	sourcemap: async (args) => {
 		const place = await pickPlace({ ...args, place: args.place ?? args._[0] })
 		const result = await refreshSourcemap(place)
@@ -470,6 +484,14 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 		return tool("exec", args, { code })
 	},
 }
+
+const cliHelpers = { health, listPlaces, matchPlace, commands }
+
+// Piping into something like `head` closes stdout early; that's not an error.
+process.stdout.on("error", (err) => {
+	if (err.code === "EPIPE") process.exit(0)
+	throw err
+})
 
 async function main() {
 	const argv = process.argv.slice(2)

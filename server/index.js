@@ -4,7 +4,7 @@ const http = require("http")
 const path = require("path")
 const crypto = require("crypto")
 const { PlaceSync } = require("./sync")
-const { SYNC_FOLDER, DEFAULT_ROOT, resolvePlaceDir, folderSize } = require("./places")
+const { placesDir, placeKey: keyOf, readConfig, resolvePlaceDir, folderSize } = require("./places")
 const { keepAwake } = require("./awake")
 const log = require("./log")
 
@@ -24,7 +24,7 @@ function isLocalRequest(headers) {
 }
 
 function startServer(rootArg, { awake = true } = {}) {
-	const root = path.resolve(rootArg ?? DEFAULT_ROOT)
+	const places = placesDir(rootArg)
 	let awakeHelper = null
 	let awakeUntil = null
 
@@ -46,7 +46,7 @@ function startServer(rootArg, { awake = true } = {}) {
 		})
 		log.info(`Keeping this computer awake until ${awakeUntil} (the screen can still turn off)`)
 	}
-	log.setFile(path.join(root, SYNC_FOLDER, ".cinq", "server.log"))
+	log.setFile(path.join(places, ".cinq", "server.log"))
 	// A detached server has no console, so its log is the only place a crash shows up.
 	process.on("uncaughtException", (err) => {
 		log.error(`Cinq crashed: ${err.stack ?? err}`)
@@ -87,7 +87,7 @@ function startServer(rootArg, { awake = true } = {}) {
 		"GET /health": async () => ({
 			name: "cinq",
 			version: VERSION,
-			root,
+			placesDir: places,
 			pid: process.pid,
 			awake: awakeUntil,
 			places: [...sessions.values()].map((sync) => ({
@@ -104,10 +104,10 @@ function startServer(rootArg, { awake = true } = {}) {
 		"POST /connect": async (body) => {
 			const placeId = String(body.placeId ?? 0)
 			const placeName = String(body.placeName ?? "Untitled")
-			const placeKey = placeId === "0" ? `0:${placeName}` : placeId
+			const placeKey = keyOf(placeId, placeName)
 			const previous = byPlace.get(placeKey)
 			if (previous) endSession(previous, SUPERSEDED)
-			const sync = new PlaceSync(resolvePlaceDir(root, placeId, placeName, { rename: true }), placeId, placeName)
+			const sync = new PlaceSync(resolvePlaceDir(places, placeId, placeName, { rename: true, links: readConfig().links }), placeId, placeName)
 			sync.placeKey = placeKey
 			await sync.load()
 			const token = crypto.randomBytes(12).toString("hex")
@@ -118,7 +118,7 @@ function startServer(rootArg, { awake = true } = {}) {
 		},
 
 		"GET /size": async (_, __, query) => {
-			const dir = resolvePlaceDir(root, String(query.get("placeId") ?? 0), String(query.get("placeName") ?? "Untitled"))
+			const dir = resolvePlaceDir(places, String(query.get("placeId") ?? 0), String(query.get("placeName") ?? "Untitled"), { links: readConfig().links })
 			return { dir, ...(await folderSize(dir)) }
 		},
 
@@ -250,7 +250,7 @@ function startServer(rootArg, { awake = true } = {}) {
 		try {
 			const running = await (await fetch(`http://127.0.0.1:${PORT}/health`)).json()
 			if (running.name !== "cinq") throw new Error()
-			log.info(`Cinq ${running.version} is already running and syncing every Studio into ${running.root}. This window can be closed.`)
+			log.info(`Cinq ${running.version} is already running and syncing every Studio into ${running.placesDir ?? running.root}. This window can be closed.`)
 			process.exit(0)
 		} catch {
 			log.error(`Port ${PORT} is used by another program. Set CINQ_PORT to run Cinq on a different port.`)
@@ -260,7 +260,7 @@ function startServer(rootArg, { awake = true } = {}) {
 
 	server.listen(PORT, "127.0.0.1", () => {
 		log.info(`Cinq ${VERSION} listening on http://localhost:${PORT}`)
-		log.info(`Places sync into ${path.join(root, SYNC_FOLDER)}`)
+		log.info(`Places sync into ${places}`)
 		if (awake) setAwake(null)
 	})
 }

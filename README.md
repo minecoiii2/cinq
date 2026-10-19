@@ -15,12 +15,18 @@ Live two-way sync between Roblox Studio and your file system, built for editing 
 
 ## Setup
 
-1. Install [Node.js](https://nodejs.org) 20+.
+1. Install [Node.js](https://nodejs.org) 20+, clone this repo, and run `npm link` in it so `cinq` works from any terminal.
 2. Install the plugin: download `Cinq.rbxm` from the [latest release](https://github.com/minecoiii2/cinq/releases/latest) into your Studio plugins folder (Plugins tab → Plugins Folder), or build and install it from source with `install-plugin.bat` (`cinq install-plugin`).
-3. Start the server: double-click `cinq.bat` (or `cinq run`) to run it in a window, or `cinq start` to run it in the background without one (`cinq stop` ends it). Every place syncs into the `Cinq` folder next to it, wherever you start it from, one server handles every open Studio, and it keeps your computer from sleeping (like PowerToys Awake, the screen can still turn off) until the terminal or Claude window that started it closes. The server itself keeps running and syncing after that. `cinq awake` turns the lock back on for your current terminal, `cinq awake off` drops it, and `--no-awake` skips it.
+3. Start the server: double-click `cinq.bat` (or `cinq run`) to run it in a window, or `cinq start` to run it in the background without one (`cinq stop` ends it). Every place syncs into one places folder (the `Cinq` folder in this repo unless you change it, see below) wherever you start it from, one server handles every open Studio, and it keeps your computer from sleeping (like PowerToys Awake, the screen can still turn off) until the terminal or Claude window that started it closes. The server itself keeps running and syncing after that. `cinq awake` turns the lock back on for your current terminal, `cinq awake off` drops it, and `--no-awake` skips it.
 4. In Studio, click **Cinq** in the Plugins toolbar and allow the localhost request.
 
-Each published place syncs into `Cinq/<PlaceId>/`, and each unpublished file into `Cinq/<file name>/`. Clicking **Cinq** turns syncing on or off for that place, and Studio remembers the choice per place, so enabled places reconnect automatically and new places are left alone. **Size** prints how much disk space the place's folder uses. Studio sends its changes at most once every 3 seconds; changes on disk reach Studio right away.
+Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublished file into `<places folder>/<file name>/`. Clicking **Cinq** turns syncing on or off for that place, and Studio remembers the choice per place, so enabled places reconnect automatically and new places are left alone. **Size** prints how much disk space the place's folder uses. Studio sends its changes at most once every 3 seconds; changes on disk reach Studio right away.
+
+### Where places sync
+
+- `cinq config root D:\Roblox\Places` syncs every place into that folder from now on, moving the ones already synced (`cinq config root --reset` goes back to the default).
+- `cinq link <place> <folder>` gives one place its own folder, for example inside the game's git repo so its scripts are versioned with it. The place's files and history move there, and other files in that folder are left alone; add `.cinq/` and `sourcemap.json` to that repo's `.gitignore`. A PlaceId that hasn't synced yet can be linked too. `cinq unlink <place>` moves it back (`--keep` leaves the files).
+- `cinq config` shows both. Settings live in `~/.cinq/config.json`, outside the repo, so updating Cinq never touches them. Changing them stops and restarts a running server; Studio reconnects on its own.
 
 ## CLI
 
@@ -32,6 +38,8 @@ Each published place syncs into `Cinq/<PlaceId>/`, and each unpublished file int
 | `start [root]` / `stop` | Start the server in the background, or stop it |
 | `awake [off]` | Keep the computer awake until this terminal (or Claude) closes, or stop doing so |
 | `status` | Whether the server is running and which Studios are connected |
+| `config`, `config root <folder>` | Where places sync, and change it |
+| `link <place> <folder>`, `unlink <place>` | Give one place its own folder, or move it back |
 | `places` | Synced places with their names, script count and size |
 | `size [place]` | Disk space used by a place, by name or PlaceId |
 | `changes [--since 12h]` | The change journal, with diffs and who made each change |
