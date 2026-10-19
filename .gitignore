@@ -1,0 +1,8 @@
+# Synced places (your game code) live here
+/Cinq/
+.cinq/
+
+# Built plugin, attached to GitHub releases instead
+/dist/
+
+node_modules/
