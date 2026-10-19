@@ -23,16 +23,29 @@ const function isSynced(instance: Instance): boolean
 	return false
 end
 
+-- With Live Scripting a collaborator's typing changes this user's open tab too, but leaves this user's cursor where it
+-- was, while this user's own typing always ends with the cursor inside the changed text.
+const function typedHere(document: ScriptDocument, changes: { any }): boolean
+	const cursorLine = document:GetSelection()
+	for _, change in changes do
+		const first = change.range.start.line
+		const _, newlines = string.gsub(change.text, "\n", "")
+		if cursorLine >= first and cursorLine <= first + newlines then
+			return true
+		end
+	end
+	return false
+end
+
 -- Marks scripts this user edits with their UserId and a hash of the source, even while the server is down.
 function Stamper.new(): Stamper
 	const self = setmetatable({ pending = {}, scheduled = false, connection = nil }, Stamper)
-	self.connection = ScriptEditorService.TextDocumentDidChange:Connect(function(document)
+	self.connection = ScriptEditorService.TextDocumentDidChange:Connect(function(document, changes)
 		if document:IsCommandBar() then
 			return
 		end
 		const source = document:GetScript()
-		-- Only the script in this user's focused editor tab counts as their edit, not a collaborator's live typing.
-		if source ~= StudioService.ActiveScript then
+		if source ~= StudioService.ActiveScript or not typedHere(document, changes) then
 			return
 		end
 		self.pending[source] = true
