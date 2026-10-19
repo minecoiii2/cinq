@@ -115,7 +115,7 @@ function readState(dir) {
 function listPlaces(base) {
 	return listPlaceDirs(base).map(({ dir, name, linked }) => {
 		const state = readState(dir)
-		const placeId = String(state?.placeId ?? (/^d+$/.test(linked || "") ? linked : "?"))
+		const placeId = String(state?.placeId ?? (/^\d+$/.test(linked || "") ? linked : "?"))
 		const named = placeId !== "0" && state?.placeName && state.placeName !== name ? `${name} "${state.placeName}"` : name
 		const label = linked ? `${named} (linked: ${dir})` : named
 		return { name, label, placeName: state?.placeName ?? name, dir, placeId, linked, scripts: Object.keys(state?.scripts ?? {}).length }
@@ -131,6 +131,12 @@ function matchPlace(places, wanted) {
 	process.exit(1)
 }
 
+// Quotes one argument the way Windows splits command lines: backslashes only matter right before a quote, so
+// those (and a trailing run, as in "D:\games\") are doubled and quotes are escaped.
+function quoteWindowsArg(arg) {
+	return `"${String(arg).replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`
+}
+
 // Windows kills every process in a job when the job's owner exits, and apps like Claude run their children (detached
 // ones included) in such a job. WMI creates the process itself, so the server isn't in that job and outlives the app.
 function startOutsideJob(command) {
@@ -140,7 +146,7 @@ function startOutsideJob(command) {
 		"exit $result.ReturnValue",
 	].join("; ")
 	const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-		env: { ...process.env, CINQ_COMMAND: command.map((part) => `"${part}"`).join(" "), CINQ_CWD: process.cwd() },
+		env: { ...process.env, CINQ_COMMAND: command.map(quoteWindowsArg).join(" "), CINQ_CWD: process.cwd() },
 		windowsHide: true,
 		encoding: "utf8",
 	})
@@ -170,7 +176,7 @@ async function refreshSourcemap(place) {
 		const response = await fetch(`http://127.0.0.1:${PORT}/sourcemap`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ place: /^[1-9]d*$/.test(place.placeId) ? place.placeId : place.name }),
+			body: JSON.stringify({ place: /^[1-9]\d*$/.test(place.placeId) ? place.placeId : place.name }),
 		})
 		return await response.json()
 	} catch {

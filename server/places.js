@@ -49,10 +49,18 @@ function listPlaceDirs(base, config = readConfig()) {
 	return dirs
 }
 
+// state.json holds every script's source (megabytes on big places) but starts with the PlaceId, so only its head is read.
 function ownerOf(dir, name) {
 	try {
-		const state = JSON.parse(fs.readFileSync(path.join(dir, ".cinq", "state.json"), "utf8"))
-		if (state.placeId !== undefined) return String(state.placeId)
+		const fd = fs.openSync(path.join(dir, ".cinq", "state.json"), "r")
+		try {
+			const head = Buffer.alloc(512)
+			const length = fs.readSync(fd, head, 0, head.length, 0)
+			const match = /"placeId":"?(\d+)"?/.exec(head.toString("utf8", 0, length))
+			if (match) return match[1]
+		} finally {
+			fs.closeSync(fd)
+		}
 	} catch {}
 	// A PlaceId-named folder whose state is missing still belongs to that place.
 	return /^\d+$/.test(name) ? name : ""

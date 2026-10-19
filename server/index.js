@@ -24,6 +24,13 @@ function isLocalRequest(headers) {
 	return LOCAL_HOSTS.has(host)
 }
 
+// The pid ends up in a PowerShell command line and the label in log text, so anything but a positive integer pid and
+// a string label is dropped (the lock then lasts until Cinq stops).
+function sanitizeOwner(owner) {
+	if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || typeof owner.label !== "string") return null
+	return { pid: owner.pid, label: owner.label.slice(0, 100) }
+}
+
 function startServer(rootArg, { awake = true } = {}) {
 	const places = placesDir(rootArg)
 	let awakeHelper = null
@@ -119,7 +126,11 @@ function startServer(rootArg, { awake = true } = {}) {
 		},
 
 		"GET /size": async (_, __, query) => {
-			const dir = resolvePlaceDir(places, String(query.get("placeId") ?? 0), String(query.get("placeName") ?? "Untitled"), { links: readConfig().links })
+			const placeId = String(query.get("placeId") ?? 0)
+			const placeName = String(query.get("placeName") ?? "Untitled")
+			// The Status widget asks every few seconds, so a connected place's folder is used as is instead of searched for.
+			const connected = sessions.get(byPlace.get(keyOf(placeId, placeName)))
+			const dir = connected?.dir ?? resolvePlaceDir(places, placeId, placeName, { links: readConfig().links })
 			return { dir, ...(await folderSize(dir)), conflicts: listConflicts(dir).length }
 		},
 
@@ -179,7 +190,7 @@ function startServer(rootArg, { awake = true } = {}) {
 		},
 
 		"POST /awake": async (body) => {
-			setAwake(body.enabled === false ? false : body.owner ?? null)
+			setAwake(body.enabled === false ? false : sanitizeOwner(body.owner))
 			return { ok: true, awake: awakeUntil }
 		},
 
@@ -268,4 +279,4 @@ function startServer(rootArg, { awake = true } = {}) {
 
 if (require.main === module) startServer(process.argv[2])
 
-module.exports = { startServer, isLocalRequest, PORT }
+module.exports = { startServer, isLocalRequest, sanitizeOwner, PORT }

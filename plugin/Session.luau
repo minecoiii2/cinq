@@ -39,7 +39,7 @@ export type Session = typeof(setmetatable(
 		rescanScheduled: boolean,
 		infoScheduled: boolean,
 		outbox: { any },
-		sending: boolean,
+		sending: any,
 		lastSend: number,
 		status: string?,
 		onStatus: (string, boolean) -> (),
@@ -86,6 +86,9 @@ function Session.start(self: Session)
 			const ok, err = pcall(self.connect, self)
 			if not ok then
 				self:teardown()
+				if not self.active then
+					break
+				end
 				Status.set("waiting")
 				self:setStatus(
 					if string.find(tostring(err), "HttpError")
@@ -100,6 +103,7 @@ function Session.start(self: Session)
 				-- Stopped while the connect request was in flight.
 				const token = self.token
 				self:teardown()
+				Status.set("off")
 				task.spawn(pcall, Http.request, "POST", "/disconnect", { session = token })
 				break
 			end
@@ -174,12 +178,14 @@ function Session.teardown(self: Session)
 	end
 	self.connections = {}
 	self.watched = {}
-	self.byId = {}
+	-- byId is kept: on reconnect it tells the scan which of two instances sharing an id (a duplicate made while the
+	-- server was down) is the original.
 	self.scriptIds = {}
 	self.lastSource = {}
 	self.lastTree = nil
 	self.dirtySources = {}
 	self.outbox = {}
+	self.sending = false
 end
 
 function Session.enqueue(self: Session, event: any)
@@ -234,46 +240,61 @@ function Session.kick(self: Session)
 	if self.sending then
 		return
 	end
-	self.sending = true
+	const loop = {}
+	const token = self.token
+	self.sending = loop
 	-- Deferred so the Stamper's handler for the same edit runs before the source is read and sent.
 	task.defer(function()
-		while self.token and (#self.outbox > 0 or next(self.dirtySources) ~= nil) do
-			const isSnapshot = self.outbox[1] ~= nil and self.outbox[1].type == "snapshot"
-			-- Polled rather than one long wait so a flush (lastSend = 0) sends right away.
-			while not isSnapshot and self.token and os.clock() < self.lastSend + Constants.EventIntervalSeconds do
-				task.wait(0.05)
-			end
-			if not self.token then
+		-- Protected so one error can't leave sending set, which would stop all syncing until Cinq is toggled.
+		const ok, err = pcall(self.sendLoop, self, token)
+		if self.sending == loop then
+			self.sending = false
+		end
+		if not ok then
+			self:setStatus(`Couldn't send changes: {err}`, true)
+		end
+	end)
+end
+
+-- Bound to one connection's token, so a loop outliving a reconnect can't send for or clear the new connection.
+function Session.sendLoop(self: Session, token: string?)
+	while token and self.token == token and (#self.outbox > 0 or next(self.dirtySources) ~= nil) do
+		const isSnapshot = self.outbox[1] ~= nil and self.outbox[1].type == "snapshot"
+		-- Polled rather than one long wait so a flush (lastSend = 0) sends right away.
+		while not isSnapshot and self.token == token and os.clock() < self.lastSend + Constants.EventIntervalSeconds do
+			task.wait(0.05)
+		end
+		if self.token ~= token then
+			break
+		end
+		self:collectSources()
+		if #self.outbox == 0 then
+			break
+		end
+		const batch = {}
+		while #self.outbox > 0 and #batch < MAX_EVENTS_PER_REQUEST do
+			const nextEvent = self.outbox[1]
+			if #batch > 0 and nextEvent.type == "snapshot" then
 				break
 			end
-			self:collectSources()
-			if #self.outbox == 0 then
+			table.insert(batch, table.remove(self.outbox, 1))
+			if nextEvent.type == "snapshot" then
 				break
 			end
-			const batch = {}
-			while #self.outbox > 0 and #batch < MAX_EVENTS_PER_REQUEST do
-				const nextEvent = self.outbox[1]
-				if #batch > 0 and nextEvent.type == "snapshot" then
-					break
-				end
-				table.insert(batch, table.remove(self.outbox, 1))
-				if nextEvent.type == "snapshot" then
-					break
-				end
-			end
-			Status.pulse()
-			const ok, status = pcall(Http.request, "POST", "/events", { session = self.token, events = batch })
-			self.lastSend = os.clock()
-			if not ok or status ~= 200 then
-				-- Dropping the token ends the poll loop, and reconnecting resends a full snapshot.
+		end
+		Status.pulse()
+		const ok, status = pcall(Http.request, "POST", "/events", { session = token, events = batch })
+		self.lastSend = os.clock()
+		if not ok or status ~= 200 then
+			-- Dropping the token ends the poll loop, and reconnecting resends a full snapshot.
+			if self.token == token then
 				self.outbox = {}
 				self.token = nil
-				break
 			end
-			self:scheduleInfo()
+			break
 		end
-		self.sending = false
-	end)
+		self:scheduleInfo()
+	end
 end
 
 function Session.refreshInfo(self: Session)
@@ -562,7 +583,12 @@ function Session.pollLoop(self: Session): string
 		failures = 0
 		if status == 200 and body and #body.ops > 0 then
 			local applied = false
+			local rescan = false
 			for _, op in body.ops do
+				-- Each op can yield in UpdateSourceAsync; after a Disconnect or lost connection the rest must not land.
+				if not self.active or self.token ~= token then
+					break
+				end
 				if op.seq <= self.after then
 					continue
 				end
@@ -571,11 +597,19 @@ function Session.pollLoop(self: Session): string
 				elseif op.op == "notice" then
 					task.spawn(self.refreshInfo, self)
 					self:setStatus(`{op.path}: {op.message}`, true)
+				elseif op.op == "rescan" then
+					rescan = true
 				else
 					self:apply(op)
 					applied = true
 				end
 				self.after = op.seq
+			end
+			if self.token ~= token then
+				break
+			end
+			if rescan and not applied then
+				self:rescan(true)
 			end
 			if applied then
 				Status.pulse()

@@ -122,7 +122,15 @@ function run(place, targets, args) {
 		console.error(`Couldn't run luau-lsp: ${result.error.message}`)
 		process.exit(1)
 	}
-	const all = parseProblems(`${result.stdout}\n${result.stderr}`, place.dir)
+	const output = `${result.stdout}\n${result.stderr}`
+	const all = parseProblems(output, place.dir)
+	// luau-lsp exits 1 both when it finds problems and when it fails (a bad path, a crash). A failure with nothing parsed
+	// must not read as "no problems", or wipe the baseline.
+	if (result.status !== 0 && all.length === 0) {
+		const said = output.split(/\r?\n/).filter((line) => line.trim() !== "" && !/^\[(INFO|WARN)\]/.test(line))
+		console.error(`luau-lsp failed (${result.signal ?? `exit ${result.status}`})${said.length > 0 ? `:\n${said.slice(0, 20).join("\n")}` : " without saying why"}`)
+		process.exit(1)
+	}
 	const baselineFile = path.join(place.dir, BASELINE_FILE)
 	let baseline = null
 	try {

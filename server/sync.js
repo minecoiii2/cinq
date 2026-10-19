@@ -15,6 +15,7 @@ const WATCH_DEBOUNCE_MS = 25
 const FALLBACK_SCAN_MS = 2000
 const MASS_DELETE_MIN = 5
 const MASS_DELETE_RATIO = 0.5
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin"
 const SOURCEMAP_DEBOUNCE_MS = 3000
 const DATAMODEL_TIMEOUT_MS = 60000
 
@@ -23,6 +24,13 @@ const newId = () => crypto.randomBytes(5).toString("hex")
 const statSig = (s) => `${s.mtimeMs}:${s.size}`
 const depth = (entry) => entry.segments.length
 const baseName = (rel) => rel.slice(rel.lastIndexOf("/") + 1)
+
+function sameNames(a, b) {
+	const pa = parsePath(a)
+	const pb = parsePath(b)
+	if (!pa || !pb || pa.kind !== pb.kind || pa.isDir !== pb.isDir || pa.segments.length !== pb.segments.length) return false
+	return pa.segments.every((s, i) => s.name === pb.segments[i].name && s.id === pb.segments[i].id)
+}
 // Studio's UpdateSourceAsync always stores LF, so both sides are compared and written in LF.
 const normalize = (text) => text.replace(/\r\n/g, "\n")
 
@@ -61,6 +69,9 @@ class PlaceSync {
 		this.lastSeen = Date.now()
 		this.tools = new Map()
 		this.toolCounter = 0
+		// Scripts whose file couldn't be written while connecting; left alone so a missing file never reads as a delete.
+		this.held = new Set()
+		this.treeStale = false
 	}
 
 	async load() {
@@ -80,10 +91,16 @@ class PlaceSync {
 		const scripts = {}
 		for (const [id, st] of this.scripts) if (!st.pending) scripts[id] = { path: st.path, synced: st.synced }
 		fs.mkdirSync(this.metaDir, { recursive: true })
-		fs.writeFileSync(this.stateFile, JSON.stringify({ version: 1, placeId: this.placeId, placeName: this.placeName, users: this.users, scripts }))
+		// Written beside and renamed over, so a crash mid-write can't leave a truncated state.json (which would
+		// mean starting fresh and losing every offline merge).
+		const temp = `${this.stateFile}.tmp`
+		fs.writeFileSync(temp, JSON.stringify({ version: 1, placeId: this.placeId, placeName: this.placeName, users: this.users, scripts }))
+		fs.renameSync(temp, this.stateFile)
 	}
 
 	dirty() {
+		// A session that was replaced must not save over its successor's state.
+		if (this.stopped) return
 		if (!this.saveTimer) this.saveTimer = setTimeout(() => this.saveNow(), 500)
 	}
 
@@ -139,7 +156,14 @@ class PlaceSync {
 		finish(result)
 	}
 
-	async writeSourcemap() {
+	// Queued so a refresh and a `cinq check` never write the copies and the sourcemap at the same time.
+	writeSourcemap() {
+		const next = (this.sourcemapQueue ?? Promise.resolve()).then(() => this.writeSourcemapNow())
+		this.sourcemapQueue = next.catch(() => {})
+		return next
+	}
+
+	async writeSourcemapNow() {
 		const result = await this.requestTool("datamodel", {}, DATAMODEL_TIMEOUT_MS)
 		if (!result.ok) throw new Error(`Studio couldn't list its instances: ${result.error}`)
 		const { map, instances, scripts, unsynced } = buildSourcemap(JSON.parse(result.text), (id) => this.scripts.get(id)?.path)
@@ -396,7 +420,10 @@ class PlaceSync {
 		const adopt = []
 		for (const entry of entries) {
 			seen.add(entry.id)
-			if (this.inflight.has(entry.id)) continue
+			if (this.inflight.has(entry.id)) {
+				this.treeStale = true
+				continue
+			}
 			const rel = scriptPath(entry)
 			const st = this.scripts.get(entry.id)
 			if (st) {
@@ -406,7 +433,9 @@ class PlaceSync {
 			}
 		}
 		for (const [id, st] of [...this.scripts]) {
-			if (!seen.has(id) && !this.inflight.has(id) && !st.pending) await this.dropScript(id, st)
+			if (seen.has(id) || st.pending) continue
+			if (this.inflight.has(id)) this.treeStale = true
+			else await this.dropScript(id, st)
 		}
 		await this.applyMoves(moves)
 		for (const [id, rel, source, by] of adopt) await this.adopt(id, rel, source, "studio", by)
@@ -439,33 +468,86 @@ class PlaceSync {
 		this.log.studio(`- ${st.path}`)
 	}
 
+	// Files go through .cinq/tmp first so swaps (A → B while B → A) work. A file must never be left only there,
+	// or the next scan would read its script as deleted, so any failure puts it back where it was.
 	async applyMoves(moves, origin = "studio") {
 		if (moves.length === 0) return
 		const tmpDir = path.join(this.metaDir, "tmp")
 		await fsp.mkdir(tmpDir, { recursive: true })
 		const staged = []
 		for (const [id, st, rel] of moves) {
+			const from = st.path
 			const tmp = path.join(tmpDir, `${id}.luau`)
-			let moved = true
 			try {
-				await fsp.rename(this.abs(st.path), tmp)
-			} catch {
-				moved = false
+				await fsp.rename(this.abs(from), tmp)
+				staged.push({ st, rel, tmp, from, moved: true })
+			} catch (err) {
+				// Missing files are rewritten at the new path; a file still sitting at its old path (locked, read-only
+				// folder) stays there, since writing a second copy would look like a new script.
+				if (err.code === "ENOENT") staged.push({ st, rel, tmp, from, moved: false })
+				else this.moveFailed(from, rel, err)
 			}
-			this.stats.delete(key(st.path))
-			staged.push({ st, rel, tmp, moved, from: st.path })
+			this.stats.delete(key(from))
 		}
-		for (const { st, rel, tmp, moved, from } of staged) {
-			const existing = await this.readRel(rel)
-			if (existing !== undefined) await this.backup(rel, existing, "Replaced untracked file")
-			await fsp.mkdir(path.dirname(this.abs(rel)), { recursive: true })
-			if (moved) await fsp.rename(tmp, this.abs(rel))
-			else await fsp.writeFile(this.abs(rel), st.synced)
+		for (const { st, rel, tmp, from, moved } of staged) {
+			try {
+				const existing = key(rel) === key(from) ? undefined : await this.readRel(rel)
+				if (existing !== undefined) await this.backup(rel, existing, "Replaced untracked file")
+				await this.ensureDirs(rel)
+				if (moved) await fsp.rename(tmp, this.abs(rel))
+				else await fsp.writeFile(this.abs(rel), st.synced)
+			} catch (err) {
+				if (moved) await this.restoreFromTmp(tmp, from)
+				this.moveFailed(from, rel, err)
+				await this.recordStat(from)
+				continue
+			}
 			await this.recordStat(rel)
 			st.path = rel
 			await this.prune(path.dirname(this.abs(from)))
 			this.journal.event(origin, "move", rel, { from })
 			this.log.studio(`${from} → ${rel}`)
+		}
+	}
+
+	async restoreFromTmp(tmp, rel) {
+		try {
+			await this.ensureDirs(rel)
+			await fsp.rename(tmp, this.abs(rel))
+		} catch {
+			try {
+				await fsp.writeFile(this.abs(rel), await fsp.readFile(tmp))
+			} catch (err) {
+				this.log.error(`Couldn't put ${rel} back (${err.code ?? err.message}); its only copy is ${tmp}`)
+			}
+		}
+	}
+
+	moveFailed(from, rel, err) {
+		this.log.warn(`Couldn't move ${from} → ${rel} on disk (${err.code ?? err.message}), keeping it at ${from}`)
+		this.notify("problem", from, `Couldn't move it to ${rel} on disk (${err.code ?? err.message})`)
+	}
+
+	// mkdir leaves an existing folder's case alone on Windows and macOS, so a folder renamed only in case in Studio
+	// would keep its old name on disk. Those renames go through a temporary name.
+	async ensureDirs(rel) {
+		let current = this.dir
+		for (const part of rel.split("/").slice(0, -1)) {
+			const wanted = path.join(current, part)
+			if (CASE_INSENSITIVE_FS) {
+				let entries = []
+				try {
+					entries = await fsp.readdir(current)
+				} catch {}
+				const actual = entries.find((name) => name.toLowerCase() === part.toLowerCase())
+				if (actual !== undefined && actual !== part) {
+					const temp = path.join(current, `${part}.cinq-rename-${process.pid}`)
+					await fsp.rename(path.join(current, actual), temp)
+					await fsp.rename(temp, wanted)
+				}
+			}
+			await fsp.mkdir(wanted, { recursive: true })
+			current = wanted
 		}
 	}
 
@@ -498,12 +580,18 @@ class PlaceSync {
 			const k = key(st.path)
 			const file = files.get(k)
 			if (file) files.delete(k)
-			if (this.inflight.has(id) || st.pending) continue
+			if (this.inflight.has(id) || st.pending || this.held.has(id)) continue
 			if (!file) {
 				missing.push(id)
 				continue
 			}
-			if (file.rel !== st.path) caseRenames.push([id, file])
+			if (file.rel !== st.path) {
+				// Only the letter case of an escape like %2f vs %2F differs: same instance names, nothing to tell Studio.
+				if (sameNames(file.rel, st.path)) {
+					st.path = file.rel
+					this.dirty()
+				} else caseRenames.push([id, file])
+			}
 			if (this.stats.get(k) === file.sig) continue
 			const text = await this.readRel(st.path)
 			this.stats.set(k, file.sig)
@@ -618,7 +706,7 @@ class PlaceSync {
 				this.log.warn(`Studio couldn't move ${op.from} → ${op.path} (${ev.error}), moving the file back`)
 				this.notify("problem", op.from, `Move to ${op.path} refused, file put back: ${ev.error}`, op.id)
 				try {
-					await fsp.mkdir(path.dirname(this.abs(op.from)), { recursive: true })
+					await this.ensureDirs(op.from)
 					await fsp.rename(this.abs(op.path), this.abs(op.from))
 				} catch {}
 				await this.prune(path.dirname(this.abs(op.path)))
@@ -639,6 +727,12 @@ class PlaceSync {
 			}
 		}
 		if (ev.source !== undefined && this.scripts.has(op.id)) await this.onStudioSource(op.id, ev.source)
+		// A tree change skipped while this op was in flight would otherwise wait for some unrelated tree change.
+		if (this.treeStale && this.inflight.size === 0) {
+			this.treeStale = false
+			this.outbox.push({ op: "rescan", seq: ++this.seq })
+			this.waiter?.resolve(this.outbox.slice())
+		}
 		this.dirty()
 		this.scheduleReconcile()
 	}
@@ -659,30 +753,34 @@ class PlaceSync {
 				adopt.push(entry)
 				continue
 			}
-			const disk = await this.readRel(st.path)
-			if (disk === undefined) {
-				lost.push(entry)
-			} else if (disk === source) {
-				st.synced = source
-			} else if (disk === st.synced) {
-				await this.writeRel(st.path, source)
-				this.journal.change("studio-offline", entry.id, st.path, st.synced, source, this.editorOf(source, entry))
-				st.synced = source
-			} else if (source !== st.synced) {
-				const merged = merge3(st.synced, disk, source)
-				if (merged.clean) {
-					await this.writeRel(st.path, merged.text)
-					if (merged.text !== source) this.send({ op: "update", id: entry.id, base: source, source: merged.text })
-					this.log.info(`merged offline edits in ${st.path}`)
-				} else {
-					await this.backup(st.path, disk, "Both sides changed while disconnected, Studio wins", { kind: "conflict", base: st.synced, studio: source })
-					this.notify("conflict", st.path, "Changed on both sides while Cinq was off; Studio's version kept, disk version saved (cinq conflicts)", entry.id)
+			try {
+				const disk = await this.readRel(st.path)
+				if (disk === undefined) {
+					lost.push(entry)
+				} else if (disk === source) {
+					st.synced = source
+				} else if (disk === st.synced) {
 					await this.writeRel(st.path, source)
+					this.journal.change("studio-offline", entry.id, st.path, st.synced, source, this.editorOf(source, entry))
+					st.synced = source
+				} else if (source !== st.synced) {
+					const merged = merge3(st.synced, disk, source)
+					if (merged.clean) {
+						await this.writeRel(st.path, merged.text)
+						if (merged.text !== source) this.send({ op: "update", id: entry.id, base: source, source: merged.text })
+						this.log.info(`merged offline edits in ${st.path}`)
+					} else {
+						await this.backup(st.path, disk, "Both sides changed while disconnected, Studio wins", { kind: "conflict", base: st.synced, studio: source })
+						this.notify("conflict", st.path, "Changed on both sides while Cinq was off; Studio's version kept, disk version saved (cinq conflicts)", entry.id)
+						await this.writeRel(st.path, source)
+					}
+					this.journal.change("studio-offline", entry.id, st.path, st.synced, source, this.editorOf(source, entry))
+					st.synced = source
 				}
-				this.journal.change("studio-offline", entry.id, st.path, st.synced, source, this.editorOf(source, entry))
-				st.synced = source
+				// Otherwise only the disk changed; the first reconcile pushes it to Studio.
+			} catch (err) {
+				this.hold(entry.id, st.path, err)
 			}
-			// Otherwise only the disk changed; the first reconcile pushes it to Studio.
 		}
 
 		if (lost.length > 0) {
@@ -694,21 +792,26 @@ class PlaceSync {
 			}
 			for (const entry of lost) {
 				const st = this.scripts.get(entry.id)
-				const index = unknown.findIndex((f) => f.text === st.synced)
-				const parsed = index === -1 ? null : parsePath(unknown[index].rel)
-				if (parsed) {
-					const file = unknown.splice(index, 1)[0]
-					const from = st.path
-					st.path = file.rel
-					if (entry.source !== st.synced) {
-						await this.writeRel(file.rel, entry.source)
+				if (this.held.has(entry.id)) continue
+				try {
+					const index = unknown.findIndex((f) => f.text === st.synced)
+					const parsed = index === -1 ? null : parsePath(unknown[index].rel)
+					if (parsed) {
+						const file = unknown.splice(index, 1)[0]
+						const from = st.path
+						st.path = file.rel
+						if (entry.source !== st.synced) {
+							await this.writeRel(file.rel, entry.source)
+							st.synced = entry.source
+						}
+						this.send({ op: "move", id: entry.id, from, path: file.rel, ...parsed })
+						this.log.disk(`${from} → ${file.rel} (moved while disconnected)`)
+					} else {
+						await this.writeRel(st.path, entry.source)
 						st.synced = entry.source
 					}
-					this.send({ op: "move", id: entry.id, from, path: file.rel, ...parsed })
-					this.log.disk(`${from} → ${file.rel} (moved while disconnected)`)
-				} else {
-					await this.writeRel(st.path, entry.source)
-					st.synced = entry.source
+				} catch (err) {
+					this.hold(entry.id, st.path, err)
 				}
 			}
 		}
@@ -720,13 +823,27 @@ class PlaceSync {
 			if (st && !this.inflight.has(entry.id) && st.path !== rel) moves.push([entry.id, st, rel])
 		}
 		await this.applyMoves(moves, "studio-offline")
-		for (const entry of adopt) await this.adopt(entry.id, scriptPath(entry), entry.source, offline, this.editorOf(entry.source, entry))
+		for (const entry of adopt) {
+			try {
+				await this.adopt(entry.id, scriptPath(entry), entry.source, offline, this.editorOf(entry.source, entry))
+			} catch (err) {
+				this.log.warn(`Couldn't write ${scriptPath(entry)} (${err.code ?? err.message}); it'll be written when Studio next changes it`)
+			}
+		}
 
+		// A session replaced by a reconnect during this sync must not start watching or saving.
+		if (this.stopped) return
 		this.ready = true
 		this.dirty()
 		this.log.info(`Synced ${entries.length} scripts for "${this.placeName}" (${this.placeId}) → ${this.dir}`)
 		await this.reconcile()
-		this.startWatching()
+		if (!this.stopped) this.startWatching()
+	}
+
+	hold(id, rel, err) {
+		this.held.add(id)
+		this.log.warn(`Couldn't sync ${rel} (${err.code ?? err.message}), leaving it alone until Studio reconnects`)
+		this.notify("problem", rel, `Couldn't write it on disk (${err.code ?? err.message}); it won't sync until you fix that and reconnect`, id)
 	}
 }
 

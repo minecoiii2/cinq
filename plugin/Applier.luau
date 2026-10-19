@@ -53,7 +53,33 @@ const function findChild(parent: Instance, segment: Scanner.Segment): Instance?
 	if segment.id then
 		return parent:QueryDescendants(`> [${Constants.IdAttribute} = "{segment.id}"]`)[1]
 	end
-	return parent:FindFirstChild(segment.name)
+	const first = parent:FindFirstChild(segment.name)
+	if not first then
+		return nil
+	end
+	-- Names can hold any character, which selectors can't express, so same-named siblings are collected by hand.
+	const named = {}
+	for _, child in parent:GetChildren() do
+		if child.Name == segment.name then
+			table.insert(named, child)
+		end
+	end
+	if #named == 1 then
+		return first
+	end
+	-- Segments only carry ids when several synced siblings share a name, so an unsynced Model can share this one:
+	-- prefer the sibling that already holds scripts, then a Folder.
+	for _, child in named do
+		if child:FindFirstChildWhichIsA("LuaSourceContainer", true) then
+			return child
+		end
+	end
+	for _, child in named do
+		if child:IsA("Folder") then
+			return child
+		end
+	end
+	return first
 end
 
 const function resolveParent(segments: { Scanner.Segment }, roots: { [Instance]: boolean }): Instance

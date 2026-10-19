@@ -28,8 +28,40 @@ function move(from, to) {
 	} catch (err) {
 		if (err.code !== "EXDEV") throw err
 		fs.cpSync(from, to, { recursive: true })
-		fs.rmSync(from, { recursive: true, force: true })
+		// The copy is complete at this point, so a leftover original is only clutter.
+		try {
+			fs.rmSync(from, { recursive: true, force: true })
+		} catch (removeErr) {
+			console.warn(`Copied ${from} to ${to}, but couldn't remove the original (${removeErr.code ?? removeErr.message}); delete it by hand`)
+		}
 	}
+}
+
+// All or nothing: if one move fails, the finished ones are moved back, so a place never ends up split between
+// two folders with its history in one and an empty resync in the other.
+function moveAll(pairs) {
+	const done = []
+	for (const [from, to] of pairs) {
+		try {
+			move(from, to)
+			done.push([from, to])
+		} catch (err) {
+			for (const [original, moved] of done.reverse()) {
+				try {
+					move(moved, original)
+				} catch (undoErr) {
+					console.error(`Couldn't move ${moved} back to ${original} (${undoErr.code ?? undoErr.message})`)
+				}
+			}
+			throw new Error(`Couldn't move ${from} (${err.code ?? err.message}), so nothing was moved. A terminal, editor or Explorer window open inside it can block this on Windows; close it and try again.`)
+		}
+	}
+}
+
+// Windows can't move a folder that is a process's current folder, including this terminal's.
+function refuseIfInside(...dirs) {
+	const blocking = dirs.find((dir) => same(process.cwd(), dir) || inside(process.cwd(), dir))
+	if (blocking) fail(`This terminal is inside ${blocking}, which has to move. Run the command from another folder.`)
 }
 
 function removeIfEmpty(dir) {
@@ -42,11 +74,14 @@ function removeIfEmpty(dir) {
 async function withServerStopped(cli, work) {
 	const wasRunning = Boolean(await cli.health())
 	if (wasRunning) await cli.commands.stop()
+	let problem = null
 	try {
 		work()
-	} finally {
-		if (wasRunning) await cli.commands.start({ _: [] }, [])
+	} catch (err) {
+		problem = err
 	}
+	if (wasRunning) await cli.commands.start({ _: [] }, [])
+	if (problem) fail(problem.message)
 }
 
 function show() {
@@ -72,9 +107,10 @@ async function setRoot(args, cli) {
 	const moving = entriesOf(current)
 	const clashes = moving.filter((name) => fs.existsSync(path.join(target, name)))
 	if (clashes.length > 0) fail(`${target} already has ${clashes.join(", ")}, nothing was moved. Pick an empty folder.`)
+	if (moving.length > 0) refuseIfInside(current)
 
 	await withServerStopped(cli, () => {
-		for (const name of moving) move(path.join(current, name), path.join(target, name))
+		moveAll(moving.map((name) => [path.join(current, name), path.join(target, name)]))
 		removeIfEmpty(current)
 		writeConfig({ ...config, root: reset ? null : target })
 	})
@@ -100,14 +136,15 @@ async function link(args, cli) {
 	const moving = place ? PLACE_ENTRIES.filter((name) => fs.existsSync(path.join(place.dir, name))) : []
 	const clashes = moving.filter((name) => fs.existsSync(path.join(target, name)))
 	if (clashes.length > 0) fail(`${target} already has ${clashes.join(", ")}, nothing was moved`)
+	// A place folder's .vscode (Cinq's sourcemap settings, plus anything added to it) goes along, unless the target
+	// already has its own; it's never deleted.
+	if (place && !place.linked && fs.existsSync(path.join(place.dir, ".vscode")) && !fs.existsSync(path.join(target, ".vscode"))) moving.push(".vscode")
+	if (place && moving.length > 0) refuseIfInside(place.dir)
 
 	await withServerStopped(cli, () => {
 		fs.mkdirSync(target, { recursive: true })
-		for (const name of moving) move(path.join(place.dir, name), path.join(target, name))
-		if (place && !place.linked) {
-			fs.rmSync(path.join(place.dir, ".vscode"), { recursive: true, force: true })
-			removeIfEmpty(place.dir)
-		}
+		moveAll(moving.map((name) => [path.join(place.dir, name), path.join(target, name)]))
+		if (place && !place.linked) removeIfEmpty(place.dir)
 		writeConfig({ ...config, links: { ...config.links, [key]: target } })
 	})
 	console.log(`${place ? place.label : `Place ${key}`} syncs into ${target} now${moving.length > 0 ? " (its files and history moved with it)" : ""}.`)
@@ -129,9 +166,10 @@ async function unlink(args, cli) {
 	const moving = args.keep || !fs.existsSync(from) ? [] : PLACE_ENTRIES.filter((name) => fs.existsSync(path.join(from, name)))
 	const clashes = moving.filter((name) => fs.existsSync(path.join(dest, name)))
 	if (clashes.length > 0) fail(`${dest} already has ${clashes.join(", ")}, nothing was moved`)
+	if (moving.length > 0) refuseIfInside(...moving.map((name) => path.join(from, name)))
 
 	await withServerStopped(cli, () => {
-		for (const name of moving) move(path.join(from, name), path.join(dest, name))
+		moveAll(moving.map((name) => [path.join(from, name), path.join(dest, name)]))
 		writeConfig({ ...config, links })
 	})
 	console.log(args.keep ? `Unlinked ${key}; its files stay in ${from}, and it syncs into ${dest} from now on` : `Moved ${key} back to ${dest}`)

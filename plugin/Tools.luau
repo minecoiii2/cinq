@@ -18,6 +18,7 @@ const MAX_READ_LINES = 2000
 const MAX_READ_LINE = 2000
 const MAX_READ_TEXT = 200000
 const MAX_SELECTED = 20
+const EXEC_RECORDING_SECONDS = 15
 const MAX_SELECTED_LINES = 60
 const CURSOR_CONTEXT = 3
 const MAX_DATAMODEL_NODES = 300000
@@ -730,7 +731,7 @@ function Tools.edit(args): string
 	local wanted: string? = nil
 	local failure: string? = nil
 	const recording = ChangeHistoryService:TryBeginRecording("Cinq: edit")
-	ScriptEditorService:UpdateSourceAsync(script, function(current)
+	const updated, problem = pcall(ScriptEditorService.UpdateSourceAsync, ScriptEditorService, script, function(current)
 		const ok, result = pcall(applyEdits, Source.normalize(current), args.edits)
 		if not ok then
 			failure = result
@@ -741,6 +742,9 @@ function Tools.edit(args): string
 	end)
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end
+	if not updated then
+		error(`couldn't edit {formatPath(script)}: {problem}`, 0)
 	end
 	if failure then
 		error(failure, 0)
@@ -780,10 +784,22 @@ function Tools.exec(args): string
 	end
 	setfenv(chunk, setmetatable({ print = capture(""), warn = capture("W ") }, { __index = getfenv() }))
 	const recording = ChangeHistoryService:TryBeginRecording("Cinq: exec")
-	const results = table.pack(pcall(chunk))
+	local results = nil
+	task.spawn(function()
+		results = table.pack(pcall(chunk))
+	end)
+	-- Code that keeps yielding would hold the undo recording open, and Studio skips recording while one is.
+	const deadline = os.clock() + EXEC_RECORDING_SECONDS
+	while not results and os.clock() < deadline do
+		task.wait(0.05)
+	end
 	-- Committed even after an error so whatever ran before it can still be undone.
 	if recording then
 		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end
+	if not results then
+		table.insert(output, `still running after {EXEC_RECORDING_SECONDS}s; it keeps going, but what it does from now on isn't part of the undo step`)
+		return clip(table.concat(output, "\n"), MAX_TEXT)
 	end
 	if not results[1] then
 		table.insert(output, `error: {results[2]}`)

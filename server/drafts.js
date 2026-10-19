@@ -49,15 +49,26 @@ function printDiffs(draft, status) {
 	console.log(indent(unifiedDiff(draft.base, draft.committed).diff))
 }
 
+function readText(file) {
+	try {
+		return fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n")
+	} catch {
+		return undefined
+	}
+}
+
 const indent = (text) => text.split("\n").map((line) => `    ${line}`).join("\n")
 const fileOf = (draft) => draft.file.replace(/^ → /, "")
 
 async function main(args, { toolText, wait, editScript }) {
+	// Studio's draft has to include every file edit first, since the merged text replaces the whole file.
+	if (args.merge) await wait()
 	const drafts = JSON.parse(await toolText("drafts", args, { within: args._[0] }, { raw: true }))
 	if (drafts.length === 0) return console.log(args._[0] ? `No drafts under ${args._[0]}` : "No drafts: every script matches its committed version")
 
 	const merged = []
 	const needsHand = []
+	const changedSince = []
 	console.log(`${drafts.length} draft${drafts.length === 1 ? "" : "s"}:`)
 	for (const draft of drafts) {
 		const status = classify(draft)
@@ -67,8 +78,14 @@ async function main(args, { toolText, wait, editScript }) {
 		if (!args.merge) continue
 		if (status.kind === "conflict") needsHand.push(draft.path)
 		if (status.kind !== "behind") continue
-		if (draft.file) fs.writeFileSync(fileOf(draft), status.merged)
-		else await editScript(draft.path, draft.draft, status.merged)
+		if (draft.file) {
+			const onDisk = readText(fileOf(draft))
+			if (onDisk !== draft.draft) {
+				changedSince.push(draft.path)
+				continue
+			}
+			fs.writeFileSync(fileOf(draft), status.merged)
+		} else await editScript(draft.path, draft.draft, status.merged)
 		merged.push(draft.path)
 	}
 
@@ -79,7 +96,8 @@ async function main(args, { toolText, wait, editScript }) {
 		console.log(`\nMerged into your draft: ${merged.join(", ")}. In View → Drafts, click Merge on ${merged.length === 1 ? "it" : "them"} (it now keeps both sides) and Commit.`)
 	}
 	if (needsHand.length > 0) console.log(`\nNeeds a hand merge, both sides changed the same lines: ${needsHand.join(", ")}`)
-	if (merged.length === 0 && needsHand.length === 0) console.log("\nNothing to merge: no draft is behind a newer commit")
+	if (changedSince.length > 0) console.log(`\nSkipped, the file changed after Studio's draft was read (run it again): ${changedSince.join(", ")}`)
+	if (merged.length === 0 && needsHand.length === 0 && changedSince.length === 0) console.log("\nNothing to merge: no draft is behind a newer commit")
 }
 
 module.exports = { main, classify }

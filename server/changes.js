@@ -11,9 +11,10 @@ const USAGE = "Usage: cinq changes [--since 24h|3d|<ISO date>] [--place <name>] 
 function parseArgs(argv) {
 	const args = { since: "24h", place: null, root: null, origin: null, diff: true }
 	for (let i = 0; i < argv.length; i++) {
-		const flag = argv[i]
+		const [raw, inline] = argv[i].split(/=(.*)/s)
+		const flag = raw === "-p" ? "--place" : raw
 		if (flag === "--no-diff") args.diff = false
-		else if (["--since", "--place", "--root", "--origin"].includes(flag)) args[flag.slice(2)] = argv[++i]
+		else if (["--since", "--place", "--root", "--origin"].includes(flag)) args[flag.slice(2)] = inline ?? argv[++i]
 		else {
 			console.log(USAGE)
 			process.exit(1)

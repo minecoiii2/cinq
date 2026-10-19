@@ -2,10 +2,13 @@
 
 const { spawn } = require("child_process")
 
+let current = null
+process.on("exit", () => current?.kill())
+
 // Same mechanism as PowerToys Awake: a helper holds ES_SYSTEM_REQUIRED (sleep blocked, screen may still turn off)
 // for as long as both the server and the owner process are alive, then exits and releases it.
 function keepAwake(ownerPid) {
-	const pids = [process.pid, ownerPid].filter(Boolean)
+	const pids = [process.pid, ownerPid].filter((pid) => Number.isSafeInteger(pid) && pid > 0)
 	let child
 	if (process.platform === "win32") {
 		const alive = pids.map((pid) => `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue)`).join(" -and ")
@@ -17,12 +20,15 @@ function keepAwake(ownerPid) {
 		].join("; ")
 		child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore", windowsHide: true })
 	} else if (process.platform === "darwin") {
-		child = spawn("caffeinate", ["-i", "-w", String(ownerPid ?? process.pid)], { stdio: "ignore" })
+		child = spawn("caffeinate", ["-i", "-w", String(pids.at(-1))], { stdio: "ignore" })
 	} else {
 		return null
 	}
 	child.on("error", () => {})
-	process.on("exit", () => child.kill())
+	current = child
+	child.on("exit", () => {
+		if (current === child) current = null
+	})
 	return child
 }
 
