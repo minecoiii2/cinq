@@ -11,7 +11,7 @@ const { findOwner } = require("./owner")
 const { SOURCEMAP_FILE } = require("./sourcemap")
 const { displayPath } = require("./check")
 
-const BOOLEAN_FLAGS = new Set(["errors", "warnings", "full", "all", "json", "no-diff", "no-install", "no-awake", "ignore-case", "lua", "no-refresh", "baseline", "diff", "merge", "reset", "keep"])
+const BOOLEAN_FLAGS = new Set(["errors", "warnings", "full", "all", "json", "no-diff", "no-install", "no-awake", "ignore-case", "lua", "no-refresh", "baseline", "diff", "merge", "reset", "keep", "check"])
 const ALIASES = { n: "lines", e: "code", d: "depth", p: "place", i: "ignore-case" }
 
 const HELP = `Cinq, two-way sync between Roblox Studio and your files
@@ -47,6 +47,8 @@ Usage: cinq <command> [options]
                             sourcemap first (-n 50, --full, --no-refresh, --defs <file>)
   rojo <place> <folder>     Export a place's scripts as a Rojo project into a new folder, keeping every script's
                             class and run context and container classes, for moving the place to Rojo
+  update                    Pull the latest Cinq, reinstall the plugin and restart the server if it's running
+                            (--check only says whether there's anything new)
   install-plugin            Build dist/Cinq.rbxm and install it into Studio (--no-install to only build)
                             --mirror <place> also writes it into that place's ServerScriptService.CinqPlugin
 
@@ -186,6 +188,11 @@ async function refreshSourcemap(place) {
 	}
 }
 
+function fail(message) {
+	console.error(message)
+	process.exit(1)
+}
+
 function usage(text) {
 	console.error(`Usage: ${text}`)
 	process.exit(1)
@@ -271,6 +278,40 @@ const commands = {
 		process.exit(1)
 	},
 	status: () => require("./status").main(),
+
+	update: async (args) => {
+		const repo = path.join(__dirname, "..")
+		if (!fs.existsSync(path.join(repo, ".git"))) {
+			console.error(`${repo} isn't a git clone, so it can't update itself. Download the latest release from https://github.com/minecoiii2/cinq/releases/latest`)
+			process.exit(1)
+		}
+		const git = (...gitArgs) => spawnSync("git", ["-C", repo, ...gitArgs], { encoding: "utf8" })
+		if (git("--version").error) {
+			console.error("git isn't installed or isn't on PATH")
+			process.exit(1)
+		}
+		const before = git("rev-parse", "HEAD").stdout.trim()
+		if (args.check) {
+			const fetched = git("fetch", "--quiet")
+			if (fetched.status !== 0) return fail(`git fetch failed:\n${fetched.stderr.trim()}`)
+			const behind = git("log", "--oneline", "HEAD..@{u}").stdout.trim()
+			return console.log(behind ? `${behind.split("\n").length} new commit(s), run cinq update:\n${behind}` : `Cinq is up to date (${require("./version").VERSION})`)
+		}
+		const pulled = git("pull", "--ff-only", "--quiet")
+		if (pulled.status !== 0) return fail(`git pull failed, nothing was changed:\n${pulled.stderr.trim()}`)
+		const after = git("rev-parse", "HEAD").stdout.trim()
+		const pulledCommits = before === after ? "" : git("log", "--oneline", `${before}..${after}`).stdout.trim()
+		console.log(pulledCommits ? `Pulled ${pulledCommits.split("\n").length} commit(s):\n${pulledCommits}` : "Already on the latest commit")
+		// Child processes, since this one still has the pre-update code loaded.
+		const cli = (...cliArgs) => spawnSync(process.execPath, [path.join(repo, "server", "cli.js"), ...cliArgs], { stdio: "inherit" }).status === 0
+		if (!cli("install-plugin")) return fail("Building the plugin failed")
+		const running = await health()
+		if (running && pulledCommits) {
+			const folderArg = running.placesDir && path.resolve(running.placesDir) !== path.resolve(placesDir()) ? [running.placesDir] : []
+			if (!cli("stop") || !cli("start", ...folderArg)) return fail("Restarting the server failed, see cinq log")
+		} else if (running) console.log("The server is already running this code, so it wasn't restarted")
+		console.log("Done. Studio reloads the plugin on its own, and synced places reconnect within a few seconds")
+	},
 	"install-plugin": async (args, argv) => {
 		const installer = require("./install-plugin")
 		installer.main(argv)

@@ -3,6 +3,7 @@
 const fs = require("fs")
 const path = require("path")
 const { writeRbxm } = require("./rbxm")
+const { VERSION, hashPluginSource } = require("./version")
 
 const RUN_CONTEXT = { legacy: 0, server: 1, client: 2, plugin: 3 }
 const source = path.join(__dirname, "..", "plugin")
@@ -36,6 +37,9 @@ function dirNode(dir, name) {
 	if (!init) return { className: "Folder", properties: { Name: { type: "string", value: name } }, children }
 	return scriptNode(name, parseFile(init.name).kind, fs.readFileSync(path.join(dir, init.name), "utf8"), children)
 }
+
+// Generated rather than kept in plugin/, so it always matches the source it was built from.
+const buildModuleSource = () => `return { version = "${VERSION}", build = "${hashPluginSource(source)}" }\n`
 
 const longString = (text) => {
 	let level = "="
@@ -84,6 +88,7 @@ const function put(className, name, runContext, source)
 	end
 end
 ${puts.join("\n")}
+put("ModuleScript", "Build", nil, ${longString(buildModuleSource())})
 for _, child in root:GetChildren() do
 	if child:IsA("LuaSourceContainer") and not keep[child.Name] then
 		child:Destroy()
@@ -101,7 +106,9 @@ return \`Mirrored ${files.length} scripts into ServerScriptService.CinqPlugin ({
 }
 
 function main(argv = process.argv.slice(2)) {
-	const model = writeRbxm([dirNode(source, "CinqPlugin")])
+	const root = dirNode(source, "CinqPlugin")
+	root.children.push(scriptNode("Build", "module", buildModuleSource()))
+	const model = writeRbxm([root])
 	fs.mkdirSync(path.dirname(dist), { recursive: true })
 	fs.writeFileSync(dist, model)
 	console.log(`Built ${dist}`)

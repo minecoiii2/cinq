@@ -13,7 +13,7 @@ const PORT = Number(process.env.CINQ_PORT ?? 34877)
 const SESSION_TIMEOUT_MS = 25000
 const TOOL_TIMEOUT_MS = 20000
 const SUPERSEDED = "another Studio connected to the same place"
-const VERSION = require("../package.json").version
+const { VERSION, pluginMismatch } = require("./version")
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"])
 
 // Browsers send Origin on cross-site POSTs (even "simple" text/plain ones that skip CORS), while Studio and the CLI don't.
@@ -106,6 +106,7 @@ function startServer(rootArg, { awake = true } = {}) {
 				scripts: sync.scripts.size,
 				connectedAt: new Date(sync.connectedAt).toISOString(),
 				lastSeenMs: Date.now() - sync.lastSeen,
+				pluginMismatch: sync.pluginMismatch,
 			})),
 		}),
 
@@ -117,12 +118,14 @@ function startServer(rootArg, { awake = true } = {}) {
 			if (previous) endSession(previous, SUPERSEDED)
 			const sync = new PlaceSync(resolvePlaceDir(places, placeId, placeName, { rename: true, links: readConfig().links }), placeId, placeName)
 			sync.placeKey = placeKey
+			sync.pluginMismatch = pluginMismatch({ version: body.pluginVersion, build: body.pluginBuild })
 			await sync.load()
 			const token = crypto.randomBytes(12).toString("hex")
 			sessions.set(token, sync)
 			byPlace.set(placeKey, token)
 			log.info(`${placeName} (${placeId}) connected`)
-			return { session: token, dir: sync.dir, version: VERSION }
+			if (sync.pluginMismatch) log.warn(`${placeName} (${placeId}): ${sync.pluginMismatch}`)
+			return { session: token, dir: sync.dir, version: VERSION, mismatch: sync.pluginMismatch }
 		},
 
 		"GET /size": async (_, __, query) => {

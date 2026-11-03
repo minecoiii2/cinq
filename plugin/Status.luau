@@ -22,6 +22,7 @@ type Parts = {
 	detail: TextLabel,
 	folder: TextBox,
 	toggle: TextButton,
+	notice: TextLabel,
 }
 
 local parts: Parts? = nil
@@ -71,6 +72,7 @@ const function repaint()
 	parts.detail.TextColor3 = dimmed
 	parts.conflicts.TextColor3 = CONFLICT_COLOR
 	parts.conflicts.BackgroundColor3 = CONFLICT_COLOR
+	parts.notice.TextColor3 = CONFLICT_COLOR
 	parts.folder.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
 	parts.folder.TextColor3 = color(Enum.StudioStyleGuideColor.MainText)
 	parts.toggle.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Button)
@@ -162,6 +164,13 @@ function Status.init(pluginObject: Plugin, onToggle: () -> ()): DockWidgetPlugin
 	toggle.Parent = background
 	toggle.Activated:Connect(onToggle)
 
+	const notice = text(background, 14)
+	notice.TextWrapped = true
+	notice.TextYAlignment = Enum.TextYAlignment.Top
+	notice.Position = UDim2.fromOffset(0, 114)
+	notice.Size = UDim2.new(1, 0, 0, 36)
+	notice.Visible = false
+
 	parts = {
 		background = background,
 		dot = dot,
@@ -172,6 +181,7 @@ function Status.init(pluginObject: Plugin, onToggle: () -> ()): DockWidgetPlugin
 		detail = detail,
 		folder = folder,
 		toggle = toggle,
+		notice = notice,
 	}
 	Studio.ThemeChanged:Connect(repaint)
 	Status.set("off")
@@ -196,6 +206,7 @@ function Status.set(state: State, folder: string?)
 		parts.syncing.Visible = false
 		parts.size.Visible = false
 		parts.conflicts.Visible = false
+		parts.notice.Visible = false
 	end
 	repaint()
 end
@@ -223,6 +234,15 @@ function Status.setInfo(bytes: number?, conflictCount: number?)
 	const count = conflictCount or 0
 	parts.conflicts.Visible = count > 0
 	parts.conflicts.Text = `⚠ {count} conflict{if count == 1 then "" else "s"}`
+end
+
+-- A warning under the button, like a plugin that doesn't match the server; nil hides it.
+function Status.setNotice(message: string?)
+	if not parts then
+		return
+	end
+	parts.notice.Visible = message ~= nil
+	parts.notice.Text = if message then `⚠ {message}` else ""
 end
 
 return Status

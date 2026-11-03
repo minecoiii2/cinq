@@ -22,6 +22,7 @@ async function main() {
 		const open = listConflicts(place.dir).length
 		const conflicts = open > 0 ? `, ${open} open conflict${open === 1 ? "" : "s"} (cinq conflicts)` : ""
 		console.log(`Studio: "${place.placeName}" (${place.placeId}) connected, ${state}${conflicts}, last seen ${Math.round(place.lastSeenMs / 1000)}s ago → ${place.dir}`)
+		if (place.pluginMismatch) console.log(`  ⚠ ${place.pluginMismatch}`)
 	}
 }
 

@@ -20,6 +20,8 @@ Live two-way sync between Roblox Studio and your file system, built for editing 
 3. Start the server: double-click `cinq.bat` (or `cinq run`) to run it in a window, or `cinq start` to run it in the background without one (`cinq stop` ends it). Every place syncs into one places folder (the `Cinq` folder in this repo unless you change it, see below) wherever you start it from, one server handles every open Studio, and it keeps your computer from sleeping (like PowerToys Awake, the screen can still turn off) until the terminal or Claude window that started it closes. The server itself keeps running and syncing after that. `cinq awake` turns the lock back on for your current terminal, `cinq awake off` drops it, and `--no-awake` skips it.
 4. In Studio, click **Cinq** in the Plugins toolbar and allow the localhost request.
 
+To update later, run `cinq update`: it pulls the latest Cinq, reinstalls the plugin and restarts the server if it was running (`cinq update --check` only says whether anything is new). The plugin and server check each other when a place connects, and if they don't match, the Status panel, Output and `cinq status` say which one to update.
+
 Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublished file into `<places folder>/<file name>/`. Clicking **Cinq** turns syncing on or off for that place, and Studio remembers the choice per place, so enabled places reconnect automatically and new places are left alone. **Size** prints how much disk space the place's folder uses. **Status** opens a small panel showing whether the place is live, waiting for the server or off, with "Syncing…" while changes move, the folder's size, an orange warning when there are open conflicts, the folder it syncs into, and a Connect / Disconnect button. Studio sends its changes at most once every 3 seconds; changes on disk reach Studio right away.
 
 ### Where places sync
@@ -47,6 +49,7 @@ Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublish
 | `wait` | Wait until Studio and disk have every pending change |
 | `backup [place]` | Copy a place's synced scripts into `Cinq/.backups/<place>/<date_time>/`; `backup list` shows them |
 | `log [-n 30]` | Recent server log (`--warnings`, `--errors`, `--grep`) |
+| `update` | Pull the latest Cinq, reinstall the plugin and restart the server (`--check` to only look) |
 | `install-plugin` | Build `dist/Cinq.rbxm` and install it into Studio (`--mirror <place>` also copies it into that place) |
 | `console [-n 50]` | Recent Studio Output (`--errors`, `--warnings`, `--grep`, `--full`); errors in synced scripts point at the file and line |
 | `tree [path] [-d 2]` | The instance tree under a path |
