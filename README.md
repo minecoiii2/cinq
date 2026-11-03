@@ -54,6 +54,7 @@ Each published place syncs into `<places folder>/<PlaceId>/`, and each unpublish
 | `inspect <path>` | Non-default properties, attributes, tags and children (`--all`) |
 | `sourcemap [place]` | Write the place's `sourcemap.json` for luau-lsp (kept current after) |
 | `check [paths]` | Type-check and lint with luau-lsp, reporting only problems that are new since the baseline |
+| `rojo <place> <folder>` | Export a place's scripts as a Rojo project, for moving the place to Rojo |
 | `drafts [path]` | In Drafts mode, scripts whose draft differs from the committed version and whether a newer commit landed on them (`--diff`, `--merge` 3-way merges clean ones into your draft) |
 | `open <file>[:line]` | Open a synced file's script in Studio's editor at a line (or select any instance path in the Explorer) |
 | `selection` | What's selected in the Explorer, the focused script with the cursor or selected lines, and the open tabs |
@@ -79,6 +80,10 @@ Studio tools take `-p <part of a name or PlaceId>` when several Studios are conn
 `cinq sourcemap` writes a Rojo-style `sourcemap.json` into the place's folder from the connected Studio: every instance in the synced services (plus the top of Workspace) with its class, synced scripts pointing at their files, and read-only copies in `.cinq/unsynced/` for scripts Cinq doesn't sync (packages, `Cinq_Ignore`), so requiring them still resolves. Cinq keeps it current as scripts are added, moved and removed, and adds a `.vscode/settings.json` so opening the place's folder in VS Code with the [Luau extension](https://marketplace.visualstudio.com/items?itemName=JohnnyMorganz.luau-lsp) gives types, autocomplete and go-to-definition across scripts.
 
 `cinq check [paths]` refreshes the sourcemap and runs [luau-lsp](https://github.com/JohnnyMorganz/luau-lsp) `analyze` with the new type solver (the one Studio uses), reusing the extension's Roblox type definitions. The first full check records the existing problems as a baseline in `.cinq/check-baseline.json`; after that only new ones are reported (`--all` shows every one, `--baseline` records them again), so it's useful on large codebases that were never type-clean.
+
+## Moving to Rojo
+
+Cinq keeps Studio as the source of truth. If you'd rather have files be the source of truth, Rojo is the better tool, and `cinq rojo <place> <new folder>` gets you there: it writes a Rojo project (`default.project.json` and `src/<Service>/…`) from the place's scripts. Every script keeps its class and run context (Rojo's legacy script mode is used when the place has LocalScripts, with `.meta.json` files for the other run contexts), containers like ScreenGuis and Tools keep their class, and every folder is set to ignore unknown instances, so `rojo serve` leaves the place's UI, models and remotes alone. Only scripts are exported. Names Rojo can't represent (characters a file name can't hold, duplicate sibling names) are listed so you can rename them in Studio first. Connect the place before exporting so container classes are current.
 
 ## License
 

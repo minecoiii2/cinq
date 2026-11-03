@@ -45,6 +45,8 @@ Usage: cinq <command> [options]
                             so luau-lsp (VS Code, cinq check) understands requires and instances; kept current after
   check [paths]             Type-check and lint a place's files (or just these) with luau-lsp, refreshing the
                             sourcemap first (-n 50, --full, --no-refresh, --defs <file>)
+  rojo <place> <folder>     Export a place's scripts as a Rojo project into a new folder, keeping every script's
+                            class and run context and container classes, for moving the place to Rojo
   install-plugin            Build dist/Cinq.rbxm and install it into Studio (--no-install to only build)
                             --mirror <place> also writes it into that place's ServerScriptService.CinqPlugin
 
@@ -430,6 +432,14 @@ ${place.label}: ${conflicts.length} open conflict${conflicts.length === 1 ? "" :
 	},
 	link: (args) => require("./config").link(args, cliHelpers),
 	unlink: (args) => require("./config").unlink(args, cliHelpers),
+	rojo: async (args) => {
+		const [wanted, target] = args._
+		if (!wanted || !target) usage("cinq rojo <place> <new folder>")
+		const place = matchPlace(listPlaces(await placesDirOf(args)), wanted)
+		const refreshed = await refreshSourcemap(place)
+		const sourcemapNote = refreshed.ok ? null : `Studio isn't connected for this place (${refreshed.error}), so container classes come from the last sourcemap`
+		require("./rojo").run(place, target, { sourcemapNote })
+	},
 	sourcemap: async (args) => {
 		const place = await pickPlace({ ...args, place: args.place ?? args._[0] })
 		const result = await refreshSourcemap(place)
