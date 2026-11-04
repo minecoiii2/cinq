@@ -85,6 +85,7 @@ end
 function Session.start(self: Session)
 	self.active = true
 	self.stamper = Stamper.new()
+	Status.set("connecting")
 	task.spawn(function()
 		while self.active do
 			const ok, err = pcall(self.connect, self)

@@ -5,12 +5,13 @@ const SYNCING_LINGER_SECONDS = 1.2
 const CONFLICT_COLOR = Color3.fromRGB(240, 150, 40)
 const DOT_COLORS = {
 	live = Color3.fromRGB(70, 190, 110),
+	connecting = Color3.fromRGB(90, 150, 230),
 	waiting = Color3.fromRGB(230, 170, 60),
 	off = Color3.fromRGB(140, 140, 140),
 }
-const LABELS = { live = "Live", waiting = "Waiting for the Cinq server", off = "Off" }
+const LABELS = { live = "Live", connecting = "Connecting…", waiting = "Waiting for the Cinq server", off = "Off" }
 
-export type State = "live" | "waiting" | "off"
+export type State = "live" | "connecting" | "waiting" | "off"
 
 type Parts = {
 	background: Frame,
@@ -197,11 +198,12 @@ function Status.set(state: State, folder: string?)
 	parts.state.Text = LABELS[state]
 	parts.detail.Text = if live
 		then "Syncing this place's scripts into:"
+		elseif state == "connecting" then "Reaching the Cinq server and sending this place's scripts."
 		elseif state == "waiting" then "Start it with cinq start; this place reconnects on its own."
 		else "Not syncing. Connect to mirror this place's scripts to files."
 	parts.folder.Visible = live and folder ~= nil
 	parts.folder.Text = folder or ""
-	parts.toggle.Text = if state == "off" then "Connect" else "Disconnect"
+	parts.toggle.Text = if state == "off" then "Connect" elseif state == "connecting" then "Cancel" else "Disconnect"
 	if not live then
 		parts.syncing.Visible = false
 		parts.size.Visible = false
